@@ -367,7 +367,9 @@ class ModelFactory:
     """模型工厂"""
     @staticmethod
     def create_model(model_id: str, device: str = "cuda", **kwargs) -> ModelWrapper:
-        if "whisper" in model_id.lower() or model_id in ["tiny", "base", "small", "medium", "large"]:
+        if ("whisper" in model_id.lower() or 
+            model_id in ["tiny", "base", "small", "medium", "large"] or
+            model_id.startswith("faster-")):
             return WhisperModelWrapper(model_id, device, **kwargs)
         elif "firered" in model_id.lower():
             return FireRedModelWrapper(model_id, device, **kwargs)
@@ -521,6 +523,7 @@ def main():
     if args.model in ["medium", "large"] and args.device == "cuda":
         logger.warning("RTX 3060 Ti显存可能不足以运行medium/large模型，建议使用faster-base")
 
+    extractor = None
     try:
         # 创建提取器
         extractor = VideoSubtitleExtractor(
@@ -560,7 +563,7 @@ def main():
 
     finally:
         # 清理临时文件和显存
-        if not args.keep_temp:
+        if extractor is not None and not args.keep_temp:
             extractor.cleanup()
 
 if __name__ == "__main__":
