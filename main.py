@@ -66,21 +66,15 @@ except ImportError:
     MOVIEPY_AVAILABLE = False
     logger.warning("MoviePy未安装，将使用FFmpeg处理音频")
 
-# 新增FireRedASR导入
+# 新增FunASR导入
 try:
-    from funasr import FireRedAsr
-    FIREREDASR_AVAILABLE = True
-    logger.info("FireRedASR库导入成功")
+    from funasr import AutoModel
+    FUNASR_AVAILABLE = True
+    logger.info("FunASR库导入成功")
 except ImportError:
-    try:
-        # 尝试其他可能的导入方式
-        from fireredasr import FireRedAsr
-        FIREREDASR_AVAILABLE = True
-        logger.info("FireRedASR库导入成功")
-    except ImportError:
-        FIREREDASR_AVAILABLE = False
-        FireRedAsr = None
-        logger.warning("未找到FireRedASR库，请确保已安装: pip install funasr 或 pip install fireredasr")
+    FUNASR_AVAILABLE = False
+    AutoModel = None
+    logger.warning("未找到FunASR库，请确保已安装: pip install funasr")
 
 class Config:
     """配置管理类"""
@@ -372,6 +366,94 @@ class WhisperModelWrapper(ModelWrapper):
             logger.error(f"❌ 转录失败: {e}")
             raise
 
+class FunASRModelWrapper(ModelWrapper):
+    """FunASR模型包装"""
+    def load_model(self) -> None:
+        """加载模型"""
+        try:
+            self.progress_tracker = ProgressTracker(100, f"加载FunASR模型")
+            
+            if self.device == "cuda" and torch.cuda.is_available():
+                RTX3060TiOptimizer.setup_gpu_memory(self.config.get('gpu_memory_fraction', 0.85))
+
+            models_path = self.config.get('models_path', './models')
+            os.makedirs(models_path, exist_ok=True)
+
+            self.progress_tracker.update(20, "下载FunASR模型文件...")
+
+            # 根据model_id选择合适的FunASR模型
+            model_mapping = {
+                "funasr-paraformer": "damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
+                "funasr-conformer": "damo/speech_conformer_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
+            }
+            
+            actual_model = model_mapping.get(self.model_id, model_mapping["funasr-paraformer"])
+            
+            self.progress_tracker.update(30, "初始化FunASR...")
+            self.model = AutoModel(
+                model=actual_model,
+                device=self.device,
+                cache_dir=models_path,
+                disable_update=True
+            )
+
+            self.progress_tracker.update(50, "模型加载完成")
+            self.progress_tracker.close()
+            logger.info(f"✅ FunASR模型 {self.model_id} 加载成功")
+
+        except Exception as e:
+            if self.progress_tracker:
+                self.progress_tracker.close()
+            logger.error(f"❌ FunASR模型加载失败: {e}")
+            raise
+
+    def transcribe(self, audio_path: str, **kwargs) -> Dict[str, Any]:
+        """转录音频"""
+        try:
+            progress = ProgressTracker(100, "FunASR音频转录中")
+
+            progress.update(10, "开始FunASR转录...")
+            
+            # FunASR转录
+            result = self.model.generate(
+                input=audio_path,
+                cache={},
+                language="zh",
+                use_itn=True,
+                batch_size_s=300
+            )
+
+            progress.update(60, "处理转录结果...")
+            
+            # 转换为标准格式
+            formatted_result = {
+                "text": "",
+                "segments": [],
+                "language": "zh"
+            }
+
+            if result and len(result) > 0:
+                for i, res in enumerate(result):
+                    text = res.get("text", "")
+                    if text:
+                        # FunASR通常返回整段文本，需要手动分段
+                        start_time = i * 30.0  # 假设每段30秒
+                        end_time = (i + 1) * 30.0
+                        
+                        formatted_result["segments"].append({
+                            "start": start_time,
+                            "end": end_time,
+                            "text": text.strip()
+                        })
+                        formatted_result["text"] += text.strip() + " "
+
+            progress.close()
+            return formatted_result
+
+        except Exception as e:
+            logger.error(f"❌ FunASR转录失败: {e}")
+            raise
+
 class VideoSubtitleExtractor:
     """视频字幕提取器"""
     def __init__(self, model_id: str = "faster-base", device: str = "cuda", config: Config = None, **kwargs):
@@ -391,6 +473,10 @@ class VideoSubtitleExtractor:
         """创建模型实例"""
         if model_id in ["tiny", "base", "small", "medium", "large", "faster-base", "faster-large"]:
             return WhisperModelWrapper(model_id, self.device, self.config, **self.kwargs)
+        elif model_id in ["funasr-paraformer", "funasr-conformer"]:
+            if not FUNASR_AVAILABLE:
+                raise ValueError("FunASR库未安装，请运行: pip install funasr")
+            return FunASRModelWrapper(model_id, self.device, self.config, **self.kwargs)
         else:
             raise ValueError(f"不支持的模型: {model_id}")
 
@@ -582,8 +668,9 @@ def main():
     parser.add_argument("video_path", nargs='?', default="test.mp4", help="输入视频文件路径")
     parser.add_argument("--output", "-o", default="output.srt", help="输出字幕文件路径")
     parser.add_argument("--model", "-m", default="faster-base",
-                        choices=["tiny", "base", "small", "medium", "large", "faster-base", "faster-large"],
-                        help="模型选择 (推荐RTX 3060 Ti使用faster-base)")
+                        choices=["tiny", "base", "small", "medium", "large", "faster-base", "faster-large", 
+                                "funasr-paraformer", "funasr-conformer"],
+                        help="模型选择 (推荐RTX 3060 Ti使用faster-base或funasr-paraformer)")
     parser.add_argument("--device", "-d", default="cuda", choices=["cuda", "cpu"], help="运行设备")
     parser.add_argument("--language", "-l", default="zh", help="语言设置")
     parser.add_argument("--keep-temp", action="store_true", help="保留临时文件")
