@@ -3,3 +3,15 @@ modules = ["python-3.12"]
 [nix]
 channel = "stable-24_05"
 packages = ["ffmpeg-full", "glibcLocales", "imagemagickBig", "libjpeg_turbo", "libpng", "libsndfile", "libxcrypt", "pkg-config", "which", "xsimd"]
+
+[workflows]
+runButton = "运行转换工具"
+
+[[workflows.workflow]]
+name = "运行转换工具"
+author = 43812541
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python main.py"
