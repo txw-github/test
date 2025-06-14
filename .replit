@@ -2,3 +2,4 @@ modules = ["python-3.12"]
 
 [nix]
 channel = "stable-24_05"
+packages = ["ffmpeg-full", "glibcLocales", "imagemagickBig", "libjpeg_turbo", "libpng", "libsndfile", "libxcrypt", "pkg-config", "which", "xsimd"]
