@@ -18,16 +18,72 @@ import psutil
 import json
 from text_postprocessor import TextPostProcessor
 
-# 配置日志
+# 配置日志 - 修复Windows编码问题
+import locale
+import sys
+
+# 设置控制台编码为UTF-8
+if sys.platform.startswith('win'):
+    try:
+        # 尝试设置控制台为UTF-8
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+    except:
+        pass
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        logging.FileHandler("video_subtitle.log"),
+        logging.FileHandler("video_subtitle.log", encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
+
+# 替换emoji字符以避免编码问题
+def safe_log_message(message):
+    """安全的日志消息，替换可能导致编码问题的字符"""
+    emoji_map = {
+        '🎬': '[VIDEO]',
+        '🤖': '[MODEL]', 
+        '💻': '[DEVICE]',
+        '✅': '[OK]',
+        '❌': '[ERROR]',
+        '⚠️': '[WARNING]',
+        '🚀': '[START]',
+        '🔄': '[LOADING]',
+        '📊': '[INFO]',
+        '🧹': '[CLEANUP]',
+        '🗑️': '[DELETE]',
+        '📝': '[SAVE]',
+        '🎯': '[TARGET]',
+        '🔍': '[CHECK]',
+        '✨': '[ENHANCE]',
+        '🎉': '[SUCCESS]'
+    }
+    for emoji, replacement in emoji_map.items():
+        message = message.replace(emoji, replacement)
+    return message
+
+# 重写logger方法
+original_info = logger.info
+original_warning = logger.warning
+original_error = logger.error
+
+def safe_info(message, *args, **kwargs):
+    return original_info(safe_log_message(str(message)), *args, **kwargs)
+
+def safe_warning(message, *args, **kwargs):
+    return original_warning(safe_log_message(str(message)), *args, **kwargs)
+
+def safe_error(message, *args, **kwargs):
+    return original_error(safe_log_message(str(message)), *args, **kwargs)
+
+logger.info = safe_info
+logger.warning = safe_warning
+logger.error = safe_error
 
 # 设置CUDA环境变量优化RTX 3060 Ti
 os.environ['CUDA_LAZY_LOADING'] = '1'
@@ -367,60 +423,109 @@ class WhisperModelWrapper(ModelWrapper):
             raise
 
 class FunASRModelWrapper(ModelWrapper):
-    """FunASR模型包装"""
+    """FunASR模型包装 - RTX 3060 Ti优化版"""
     def load_model(self) -> None:
         """加载模型"""
         try:
             self.progress_tracker = ProgressTracker(100, f"加载FunASR模型")
             
-            if self.device == "cuda" and torch.cuda.is_available():
-                RTX3060TiOptimizer.setup_gpu_memory(self.config.get('gpu_memory_fraction', 0.85))
+            # 强制内存清理
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                # 为FunASR模型设置更保守的显存占用
+                RTX3060TiOptimizer.setup_gpu_memory(0.7)  # 降低到70%
 
             models_path = self.config.get('models_path', './models')
             os.makedirs(models_path, exist_ok=True)
 
             self.progress_tracker.update(20, "下载FunASR模型文件...")
 
-            # 根据model_id选择合适的FunASR模型
+            # 使用较小的FunASR模型，适配RTX 3060 Ti
             model_mapping = {
-                "funasr-paraformer": "damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
+                "funasr-paraformer": "damo/speech_paraformer_asr-zh-cn-16k-common-vocab8404-onnx",  # 使用ONNX版本，内存占用更小
                 "funasr-conformer": "damo/speech_conformer_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
             }
             
             actual_model = model_mapping.get(self.model_id, model_mapping["funasr-paraformer"])
             
             self.progress_tracker.update(30, "初始化FunASR...")
-            self.model = AutoModel(
-                model=actual_model,
-                device=self.device,
-                cache_dir=models_path,
-                disable_update=True
-            )
+            
+            # 为RTX 3060 Ti优化的参数
+            model_kwargs = {
+                "model": actual_model,
+                "cache_dir": models_path,
+                "disable_update": True,
+                "model_revision": "v2.0.4"  # 使用稳定版本
+            }
+            
+            # 只在显存充足时使用GPU
+            if self.device == "cuda" and torch.cuda.is_available():
+                available_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+                if available_memory >= 5.0:  # 至少5GB可用显存
+                    model_kwargs["device"] = "cuda"
+                else:
+                    logger.warning("显存不足，FunASR将使用CPU模式")
+                    model_kwargs["device"] = "cpu"
+                    self.device = "cpu"
+            else:
+                model_kwargs["device"] = "cpu"
+                self.device = "cpu"
+            
+            self.model = AutoModel(**model_kwargs)
 
             self.progress_tracker.update(50, "模型加载完成")
             self.progress_tracker.close()
-            logger.info(f"✅ FunASR模型 {self.model_id} 加载成功")
+            logger.info(f"[OK] FunASR模型 {self.model_id} 加载成功，运行设备: {self.device}")
 
         except Exception as e:
             if self.progress_tracker:
                 self.progress_tracker.close()
-            logger.error(f"❌ FunASR模型加载失败: {e}")
-            raise
+            logger.error(f"[ERROR] FunASR模型加载失败: {e}")
+            # 尝试降级到CPU模式
+            if self.device == "cuda":
+                logger.info("尝试使用CPU模式重新加载...")
+                self.device = "cpu"
+                try:
+                    self.model = AutoModel(
+                        model="damo/speech_paraformer_asr-zh-cn-16k-common-vocab8404-onnx",
+                        device="cpu",
+                        cache_dir=models_path,
+                        disable_update=True
+                    )
+                    logger.info("[OK] FunASR模型已在CPU模式下加载成功")
+                except Exception as cpu_e:
+                    logger.error(f"[ERROR] CPU模式也失败: {cpu_e}")
+                    raise
+            else:
+                raise
 
     def transcribe(self, audio_path: str, **kwargs) -> Dict[str, Any]:
-        """转录音频"""
+        """转录音频 - RTX 3060 Ti优化版"""
         try:
             progress = ProgressTracker(100, "FunASR音频转录中")
 
             progress.update(10, "开始FunASR转录...")
             
-            # FunASR转录
+            # 检查音频文件大小，如果太大则分段处理
+            file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
+            if file_size_mb > 100:  # 大于100MB的音频文件分段处理
+                logger.info(f"音频文件较大({file_size_mb:.1f}MB)，将分段处理以节省内存")
+                return self._transcribe_large_file(audio_path, progress)
+            
+            # 强制内存清理
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            # FunASR转录 - 使用保守的参数
             result = self.model.generate(
                 input=audio_path,
                 cache={},
                 language="zh",
                 use_itn=True,
-                batch_size_s=300
+                batch_size_s=60,  # 减小批处理大小，降低内存占用
+                batch_size=1     # 单个批次处理
             )
 
             progress.update(60, "处理转录结果...")
@@ -446,12 +551,103 @@ class FunASRModelWrapper(ModelWrapper):
                             "text": text.strip()
                         })
                         formatted_result["text"] += text.strip() + " "
+                        
+                        # 每处理10个片段清理一次内存
+                        if i % 10 == 0:
+                            gc.collect()
 
             progress.close()
+            
+            # 转录完成后清理内存
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                
             return formatted_result
 
         except Exception as e:
-            logger.error(f"❌ FunASR转录失败: {e}")
+            logger.error(f"[ERROR] FunASR转录失败: {e}")
+            # 内存不足时的错误处理
+            if "out of memory" in str(e).lower() or "cuda" in str(e).lower():
+                logger.warning("显存不足，尝试切换到CPU模式...")
+                try:
+                    # 重新加载为CPU模式
+                    self.device = "cpu"
+                    self.load_model()
+                    return self.transcribe(audio_path, **kwargs)
+                except Exception as cpu_e:
+                    logger.error(f"[ERROR] CPU模式也失败: {cpu_e}")
+            raise
+    
+    def _transcribe_large_file(self, audio_path: str, progress: ProgressTracker) -> Dict[str, Any]:
+        """分段处理大音频文件"""
+        try:
+            import librosa
+            
+            # 加载音频并分段
+            audio, sr = librosa.load(audio_path, sr=16000)
+            duration = len(audio) / sr
+            segment_length = 300  # 5分钟一段
+            
+            formatted_result = {
+                "text": "",
+                "segments": [],
+                "language": "zh"
+            }
+            
+            progress.update(20, f"分段处理音频，总时长: {duration:.1f}秒")
+            
+            for start_sec in range(0, int(duration), segment_length):
+                end_sec = min(start_sec + segment_length, duration)
+                
+                # 提取音频段
+                start_sample = int(start_sec * sr)
+                end_sample = int(end_sec * sr)
+                segment_audio = audio[start_sample:end_sample]
+                
+                # 保存临时文件
+                temp_path = f"temp_segment_{start_sec}.wav"
+                sf.write(temp_path, segment_audio, sr)
+                
+                try:
+                    # 转录该段
+                    segment_result = self.model.generate(
+                        input=temp_path,
+                        cache={},
+                        language="zh",
+                        use_itn=True,
+                        batch_size_s=60,
+                        batch_size=1
+                    )
+                    
+                    if segment_result and len(segment_result) > 0:
+                        for res in segment_result:
+                            text = res.get("text", "")
+                            if text:
+                                formatted_result["segments"].append({
+                                    "start": start_sec,
+                                    "end": end_sec,
+                                    "text": text.strip()
+                                })
+                                formatted_result["text"] += text.strip() + " "
+                    
+                    # 清理临时文件和内存
+                    os.remove(temp_path)
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                        
+                except Exception as e:
+                    logger.warning(f"段 {start_sec}-{end_sec} 处理失败: {e}")
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                
+                progress.update(60 * (end_sec - start_sec) / duration, f"处理进度: {end_sec:.0f}/{duration:.0f}秒")
+            
+            return formatted_result
+            
+        except Exception as e:
+            logger.error(f"[ERROR] 大文件分段处理失败: {e}")
             raise
 
 class VideoSubtitleExtractor:
@@ -702,7 +898,14 @@ def main():
     logger.info(f"💻 运行设备: {args.device}")
 
     if args.model in ["medium", "large"] and args.device == "cuda":
-        logger.warning("⚠️ RTX 3060 Ti显存可能不足以运行medium/large模型，建议使用faster-base")
+        logger.warning("[WARNING] RTX 3060 Ti显存可能不足以运行medium/large模型，建议使用faster-base")
+    
+    if args.model in ["funasr-paraformer", "funasr-conformer"]:
+        logger.warning("[WARNING] FunASR模型内存占用较大，如遇到内存不足请考虑使用faster-base模型")
+        # 检查可用内存
+        memory = psutil.virtual_memory()
+        if memory.available < 4 * 1024**3:  # 小于4GB可用内存
+            logger.warning(f"[WARNING] 可用内存不足({memory.available/1024**3:.1f}GB)，建议关闭其他程序或使用smaller模型")
 
     extractor = None
     try:
