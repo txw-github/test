@@ -1,0 +1,211 @@
+模型加载完成: 100%|██████████| 100/100 [00:58<00:00,  1.71step/s]
+--- Logging error ---
+Traceback (most recent call last):
+  File "D:\code\anaconda3\Lib\logging\__init__.py", line 1163, in emit
+    stream.write(msg + self.terminator)
+UnicodeEncodeError: 'gbk' codec can't encode character '\u2705' in position 31: illegal multibyte sequence
+Call stack:
+  File "D:\Desktop\test-main\main.py", line 790, in <module>
+    main()
+  File "D:\Desktop\test-main\main.py", line 748, in main
+    result = extractor.transcribe_audio(
+  File "D:\Desktop\test-main\main.py", line 573, in transcribe_audio
+    self.model_wrapper.load_model()
+  File "D:\Desktop\test-main\main.py", line 423, in load_model
+    logger.info(f"✅ FunASR模型 {self.model_id} 加载成功")
+Message: '✅ FunASR模型 funasr-paraformer 加载成功'
+Arguments: ()
+2025-06-14 13:46:27,810 [INFO] ✅ FunASR模型 funasr-paraformer 加载成功
+开始FunASR转录...:   0%|          | 0/100 [00:00<?, ?step/s]
+  0%|          | 0/1 [00:00<?, ?it/s]🚀 开始 音频转录...
+--- Logging error ---
+Traceback (most recent call last):
+  File "D:\Desktop\test-main\main.py", line 439, in transcribe
+    result = self.model.generate(
+             ^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\funasr\auto\auto_model.py", line 303, in generate
+    return self.inference(input, input_len=input_len, **cfg)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\funasr\auto\auto_model.py", line 345, in inference
+    res = model.inference(**batch, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\funasr\models\paraformer\model.py", line 500, in inference
+    encoder_out, encoder_out_lens = self.encode(speech, speech_lengths)
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\funasr\models\paraformer\model.py", line 262, in encode
+    encoder_out, encoder_out_lens, _ = self.encoder(speech, speech_lengths)
+                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1736, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1747, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\funasr\models\sanm\encoder.py", line 400, in forward
+    encoder_outs = self.encoders0(xs_pad, masks)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1736, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1747, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\funasr\models\transformer\utils\repeat.py", line 32, in forward
+    args = m(*args)
+           ^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1736, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1747, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\funasr\models\sanm\encoder.py", line 131, in forward
+    self.self_attn(
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1736, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1747, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\funasr\models\sanm\attention.py", line 309, in forward
+    scores = torch.matmul(q_h, k_h.transpose(-2, -1))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 34.15 GiB. GPU 0 has a total capacity of 6.00 GiB of which 1.59 GiB is free. 5.10 GiB allowed; Of the allocated memory 1.60 GiB is allocated by PyTorch, and 61.94 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\code\anaconda3\Lib\logging\__init__.py", line 1163, in emit
+    stream.write(msg + self.terminator)
+UnicodeEncodeError: 'gbk' codec can't encode character '\u274c' in position 32: illegal multibyte sequence
+Call stack:
+  File "D:\Desktop\test-main\main.py", line 790, in <module>
+    main()
+  File "D:\Desktop\test-main\main.py", line 748, in main
+    result = extractor.transcribe_audio(
+  File "D:\Desktop\test-main\main.py", line 576, in transcribe_audio
+    result = self.model_wrapper.transcribe(audio_path, **kwargs)
+  File "D:\Desktop\test-main\main.py", line 475, in transcribe
+    logger.error(f"❌ FunASR转录失败: {e}")
+Message: '❌ FunASR转录失败: CUDA out of memory. Tried to allocate 34.15 GiB. GPU 0 has a total capacity of 6.00 GiB of which 1.59 GiB is free. 5.10 GiB allowed; Of the allocated memory 1.60 GiB is allocated by PyTorch, and 61.94 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)'
+Arguments: ()
+2025-06-14 13:46:31,922 [ERROR] ❌ FunASR转录失败: CUDA out of memory. Tried to allocate 34.15 GiB. GPU 0 has a total capacity of 6.00 GiB of which 1.59 GiB is free. 5.10 GiB allowed; Of the allocated memory 1.60 GiB is allocated by PyTorch, and 61.94 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+--- Logging error ---
+Traceback (most recent call last):
+  File "D:\Desktop\test-main\main.py", line 576, in transcribe_audio
+    result = self.model_wrapper.transcribe(audio_path, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\main.py", line 439, in transcribe
+    result = self.model.generate(
+             ^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\funasr\auto\auto_model.py", line 303, in generate
+    return self.inference(input, input_len=input_len, **cfg)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\funasr\auto\auto_model.py", line 345, in inference
+    res = model.inference(**batch, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\funasr\models\paraformer\model.py", line 500, in inference
+    encoder_out, encoder_out_lens = self.encode(speech, speech_lengths)
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\funasr\models\paraformer\model.py", line 262, in encode
+    encoder_out, encoder_out_lens, _ = self.encoder(speech, speech_lengths)
+                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1736, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1747, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\funasr\models\sanm\encoder.py", line 400, in forward
+    encoder_outs = self.encoders0(xs_pad, masks)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1736, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1747, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\funasr\models\transformer\utils\repeat.py", line 32, in forward
+    args = m(*args)
+           ^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1736, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1747, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\funasr\models\sanm\encoder.py", line 131, in forward
+    self.self_attn(
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1736, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\torch\nn\modules\module.py", line 1747, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Desktop\test-main\.venv\Lib\site-packages\funasr\models\sanm\attention.py", line 309, in forward
+    scores = torch.matmul(q_h, k_h.transpose(-2, -1))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 34.15 GiB. GPU 0 has a total capacity of 6.00 GiB of which 1.59 GiB is free. 5.10 GiB allowed; Of the allocated memory 1.60 GiB is allocated by PyTorch, and 61.94 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\code\anaconda3\Lib\logging\__init__.py", line 1163, in emit
+    stream.write(msg + self.terminator)
+UnicodeEncodeError: 'gbk' codec can't encode character '\u274c' in position 32: illegal multibyte sequence
+Call stack:
+  File "D:\Desktop\test-main\main.py", line 790, in <module>
+    main()
+  File "D:\Desktop\test-main\main.py", line 748, in main
+    result = extractor.transcribe_audio(
+  File "D:\Desktop\test-main\main.py", line 587, in transcribe_audio
+    logger.error(f"❌ 音频转录失败: {e}")
+Message: '❌ 音频转录失败: CUDA out of memory. Tried to allocate 34.15 GiB. GPU 0 has a total capacity of 6.00 GiB of which 1.59 GiB is free. 5.10 GiB allowed; Of the allocated memory 1.60 GiB is allocated by PyTorch, and 61.94 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)'
+Arguments: ()
+2025-06-14 13:46:31,929 [ERROR] ❌ 音频转录失败: CUDA out of memory. Tried to allocate 34.15 GiB. GPU 0 has a total capacity of 6.00 GiB of which 1.59 GiB is free. 5.10 GiB allowed; Of the allocated memory 1.60 GiB is allocated by PyTorch, and 61.94 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+✅ 音频转录 完成，耗时: 4.12 秒
+  0%|          | 0/1 [00:04<?, ?it/s]
+开始FunASR转录...:  10%|█         | 10/100 [00:04<00:37,  2.39step/s]
+--- Logging error ---
+Traceback (most recent call last):
+  File "D:\code\anaconda3\Lib\logging\__init__.py", line 1163, in emit
+    stream.write(msg + self.terminator)
+UnicodeEncodeError: 'gbk' codec can't encode character '\u26a0' in position 34: illegal multibyte sequence
+Call stack:
+  File "D:\Desktop\test-main\main.py", line 790, in <module>
+    main()
+  File "D:\Desktop\test-main\main.py", line 755, in main
+    logger.warning("⚠️ 未识别到任何语音内容")
+Message: '⚠️ 未识别到任何语音内容'
+Arguments: ()
+2025-06-14 13:46:31,995 [WARNING] ⚠️ 未识别到任何语音内容
+--- Logging error ---
+Traceback (most recent call last):
+  File "D:\code\anaconda3\Lib\logging\__init__.py", line 1163, in emit
+    stream.write(msg + self.terminator)
+UnicodeEncodeError: 'gbk' codec can't encode character '\U0001f5d1' in position 31: illegal multibyte sequence
+Call stack:
+  File "D:\Desktop\test-main\main.py", line 790, in <module>
+    main()
+  File "D:\Desktop\test-main\main.py", line 784, in main
+    extractor.cleanup()
+  File "D:\Desktop\test-main\main.py", line 677, in cleanup
+    logger.info(f"🗑️ 删除临时文件: {file}")
+Message: '🗑️ 删除临时文件: 1_audio.wav'
+Arguments: ()
+2025-06-14 13:46:32,012 [INFO] 🗑️ 删除临时文件: 1_audio.wav
+--- Logging error ---
+Traceback (most recent call last):
+  File "D:\code\anaconda3\Lib\logging\__init__.py", line 1163, in emit
+    stream.write(msg + self.terminator)
+UnicodeEncodeError: 'gbk' codec can't encode character '\U0001f9f9' in position 31: illegal multibyte sequence
+Call stack:
+  File "D:\Desktop\test-main\main.py", line 790, in <module>
+    main()
+  File "D:\Desktop\test-main\main.py", line 784, in main
+    extractor.cleanup()
+  File "D:\Desktop\test-main\main.py", line 685, in cleanup
+    logger.info("🧹 GPU显存清理完成")
+Message: '🧹 GPU显存清理完成'
+Arguments: ()
+2025-06-14 13:46:32,156 [INFO] 🧹 GPU显存清理完成
