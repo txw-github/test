@@ -1,50 +1,51 @@
+
 @echo off
+chcp 65001
 echo ========================================
-echo 视频转字幕工具 - 快速使用
+echo 快速开始 - 中文电视剧音频转文字
 echo ========================================
 
-echo 请将要转换的视频文件拖拽到此窗口，然后按回车
-echo 支持格式：MP4, AVI, MOV, MKV, WMV等
+echo 检查环境...
+python --version >nul 2>&1
+if errorlevel 1 (
+    echo 请先运行 setup_environment.bat 安装环境
+    pause
+    exit /b 1
+)
+
+echo 环境检查通过✓
 echo.
 
-set /p video_file="请输入视频文件路径: "
+echo 当前目录的视频文件：
+echo ----------------------------------------
+for %%f in (*.mp4 *.mkv *.avi *.mov *.wmv) do echo %%f
+echo ----------------------------------------
 
-if "%video_file%"=="" (
-    echo 未输入视频文件路径！
+echo.
+echo 将使用默认设置：
+echo - 模型: faster-base （推荐RTX 3060 Ti）
+echo - 语言: 中文
+echo - 输出: output.srt
+
+echo.
+set /p video_file="请输入要转换的视频文件名: "
+
+if not exist "%video_file%" (
+    echo 错误：文件不存在！
     pause
     exit /b 1
 )
 
 echo.
-echo 选择模型：
-echo 1. faster-base（推荐，速度快，精度好）
-echo 2. base（标准模型）
-echo 3. large（高精度，需要更多显存）
-echo 4. small（速度最快，精度较低）
+echo 开始转换 %video_file% ...
+python main.py "%video_file%" --model faster-base --language zh --output output.srt
+
 echo.
-
-set /p model_choice="请选择模型 (1-4，默认1): "
-
-if "%model_choice%"=="" set model_choice=1
-
-if "%model_choice%"=="1" set model_name=faster-base
-if "%model_choice%"=="2" set model_name=base
-if "%model_choice%"=="3" set model_name=large
-if "%model_choice%"=="4" set model_name=small
-
-if not defined model_name (
-    echo 无效选择，使用默认模型 faster-base
-    set model_name=faster-base
+if exist "output.srt" (
+    echo ✓ 转换完成！字幕已保存为 output.srt
+    echo 您可以将此文件重命名并与视频一起使用
+) else (
+    echo ✗ 转换失败，请查看错误信息或运行 start_conversion.bat 尝试其他模型
 )
 
-echo.
-echo 开始转换，使用模型: %model_name%
-echo 视频文件: %video_file%
-echo.
-
-python main.py "%video_file%" --model %model_name% --output "%~n1.srt"
-
-echo.
-echo 转换完成！字幕文件已保存。
-echo.
 pause
