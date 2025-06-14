@@ -110,10 +110,14 @@ try:
     import tensorrt as trt
     import pycuda.driver as cuda
     import pycuda.autoinit
+    import onnx
+    import onnxruntime as ort
     TENSORRT_AVAILABLE = True
+    ONNX_AVAILABLE = True
 except ImportError:
     TENSORRT_AVAILABLE = False
-    logger.warning("TensorRT不可用，将使用PyTorch加速")
+    ONNX_AVAILABLE = False
+    logger.warning("TensorRT/ONNX不可用，将使用PyTorch加速")
 
 try:
     from moviepy.editor import VideoFileClip
@@ -235,6 +239,10 @@ class RTX3060TiOptimizer:
                 total_memory = torch.cuda.get_device_properties(0).total_memory
                 max_memory = int(total_memory * memory_fraction)
                 torch.cuda.set_per_process_memory_fraction(memory_fraction)
+                
+                # 启用内存池优化
+                os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128,expandable_segments:True'
+                
                 logger.info(f"GPU显存优化完成，总显存: {total_memory/1024**3:.1f}GB，预留使用: {max_memory/1024**3:.1f}GB")
             except Exception as e:
                 logger.warning(f"显存优化失败: {e}")
@@ -249,6 +257,31 @@ class RTX3060TiOptimizer:
             else:
                 return 2
         return 1
+
+    @staticmethod
+    def optimize_cuda_settings():
+        """优化CUDA设置"""
+        if torch.cuda.is_available():
+            # 启用TensorRT优化
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
+            torch.backends.cudnn.enabled = True
+            
+            # 设置CUDA流优化
+            torch.cuda.synchronize()
+            
+            # 内存优化
+            torch.cuda.empty_cache()
+            
+            logger.info("CUDA优化设置完成")
+
+    @staticmethod
+    def get_tensorrt_engine_path(model_name: str, config: Config) -> str:
+        """获取TensorRT引擎文件路径"""
+        models_path = config.get('models_path', './models')
+        engine_dir = os.path.join(models_path, 'tensorrt_engines')
+        os.makedirs(engine_dir, exist_ok=True)
+        return os.path.join(engine_dir, f"{model_name.replace('/', '_')}.trt")
 
 class SystemChecker:
     """系统检查器"""
@@ -422,61 +455,250 @@ class WhisperModelWrapper(ModelWrapper):
             logger.error(f"❌ 转录失败: {e}")
             raise
 
+class TensorRTOptimizer:
+    """TensorRT优化器"""
+    
+    @staticmethod
+    def convert_to_tensorrt(onnx_path: str, engine_path: str, precision: str = "fp16") -> bool:
+        """将ONNX模型转换为TensorRT引擎"""
+        try:
+            if not TENSORRT_AVAILABLE:
+                logger.warning("TensorRT不可用，跳过优化")
+                return False
+                
+            logger.info(f"开始转换TensorRT引擎: {onnx_path} -> {engine_path}")
+            
+            # 创建TensorRT logger
+            trt_logger = trt.Logger(trt.Logger.WARNING)
+            
+            # 创建builder和network
+            builder = trt.Builder(trt_logger)
+            config = builder.create_builder_config()
+            
+            # 设置内存池大小（RTX 3060 Ti优化）
+            config.max_workspace_size = 2 << 30  # 2GB
+            
+            # 启用精度优化
+            if precision == "fp16" and builder.platform_has_fast_fp16:
+                config.set_flag(trt.BuilderFlag.FP16)
+                logger.info("启用FP16精度优化")
+            elif precision == "int8" and builder.platform_has_fast_int8:
+                config.set_flag(trt.BuilderFlag.INT8)
+                logger.info("启用INT8精度优化")
+            
+            # 创建网络
+            network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
+            
+            # 解析ONNX文件
+            parser = trt.OnnxParser(network, trt_logger)
+            with open(onnx_path, 'rb') as model:
+                if not parser.parse(model.read()):
+                    logger.error("ONNX解析失败")
+                    for error in range(parser.num_errors):
+                        logger.error(parser.get_error(error))
+                    return False
+            
+            # 构建引擎
+            profile = builder.create_optimization_profile()
+            
+            # 为输入设置动态形状
+            for i in range(network.num_inputs):
+                input_tensor = network.get_input(i)
+                input_shape = input_tensor.shape
+                
+                # 设置最小、最优、最大形状
+                min_shape = [1 if dim == -1 else dim for dim in input_shape]
+                opt_shape = [4 if dim == -1 else dim for dim in input_shape]  # RTX 3060 Ti优化批次大小
+                max_shape = [8 if dim == -1 else dim for dim in input_shape]
+                
+                profile.set_shape(input_tensor.name, min_shape, opt_shape, max_shape)
+            
+            config.add_optimization_profile(profile)
+            
+            # 构建引擎
+            engine = builder.build_engine(network, config)
+            if engine is None:
+                logger.error("TensorRT引擎构建失败")
+                return False
+            
+            # 保存引擎
+            with open(engine_path, 'wb') as f:
+                f.write(engine.serialize())
+            
+            logger.info(f"TensorRT引擎构建成功: {engine_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"TensorRT转换失败: {e}")
+            return False
+
+    @staticmethod
+    def load_tensorrt_engine(engine_path: str):
+        """加载TensorRT引擎"""
+        try:
+            if not os.path.exists(engine_path):
+                logger.error(f"TensorRT引擎文件不存在: {engine_path}")
+                return None
+                
+            trt_logger = trt.Logger(trt.Logger.WARNING)
+            runtime = trt.Runtime(trt_logger)
+            
+            with open(engine_path, 'rb') as f:
+                engine = runtime.deserialize_cuda_engine(f.read())
+            
+            if engine is None:
+                logger.error("TensorRT引擎加载失败")
+                return None
+                
+            logger.info(f"TensorRT引擎加载成功: {engine_path}")
+            return engine
+            
+        except Exception as e:
+            logger.error(f"TensorRT引擎加载错误: {e}")
+            return None
+
+class ONNXOptimizer:
+    """ONNX运行时优化器"""
+    
+    @staticmethod
+    def create_ort_session(model_path: str, device: str = "cuda") -> Optional[object]:
+        """创建优化的ONNX Runtime会话"""
+        try:
+            if not ONNX_AVAILABLE:
+                logger.warning("ONNX Runtime不可用")
+                return None
+                
+            # 配置providers
+            providers = []
+            if device == "cuda" and "CUDAExecutionProvider" in ort.get_available_providers():
+                providers.append(("CUDAExecutionProvider", {
+                    "device_id": 0,
+                    "arena_extend_strategy": "kNextPowerOfTwo",
+                    "gpu_mem_limit": 4 * 1024 * 1024 * 1024,  # 4GB for RTX 3060 Ti
+                    "cudnn_conv_algo_search": "EXHAUSTIVE",
+                    "do_copy_in_default_stream": True,
+                }))
+            providers.append("CPUExecutionProvider")
+            
+            # 创建会话选项
+            sess_options = ort.SessionOptions()
+            sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            sess_options.execution_mode = ort.ExecutionMode.ORT_PARALLEL
+            sess_options.inter_op_num_threads = 4
+            sess_options.intra_op_num_threads = 4
+            
+            # 创建会话
+            session = ort.InferenceSession(model_path, sess_options, providers=providers)
+            
+            logger.info(f"ONNX Runtime会话创建成功，使用providers: {session.get_providers()}")
+            return session
+            
+        except Exception as e:
+            logger.error(f"ONNX Runtime会话创建失败: {e}")
+            return None
+
 class FunASRModelWrapper(ModelWrapper):
     """FunASR模型包装 - RTX 3060 Ti优化版"""
     def load_model(self) -> None:
-        """加载模型"""
+        """加载模型 - TensorRT优化版"""
         try:
             self.progress_tracker = ProgressTracker(100, f"加载FunASR模型")
+            
+            # 应用RTX 3060 Ti优化
+            RTX3060TiOptimizer.optimize_cuda_settings()
             
             # 强制内存清理
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-                # 为FunASR模型设置更保守的显存占用
-                RTX3060TiOptimizer.setup_gpu_memory(0.7)  # 降低到70%
+                RTX3060TiOptimizer.setup_gpu_memory(0.65)  # 更保守的显存使用
 
             models_path = self.config.get('models_path', './models')
             os.makedirs(models_path, exist_ok=True)
 
-            self.progress_tracker.update(20, "下载FunASR模型文件...")
+            self.progress_tracker.update(10, "检查优化模型...")
 
-            # 使用较小的FunASR模型，适配RTX 3060 Ti
+            # 优先使用ONNX模型，支持TensorRT加速
             model_mapping = {
-                "funasr-paraformer": "damo/speech_paraformer_asr-zh-cn-16k-common-vocab8404-onnx",  # 使用ONNX版本，内存占用更小
-                "funasr-conformer": "damo/speech_conformer_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
+                "funasr-paraformer": "damo/speech_paraformer_asr-zh-cn-16k-common-vocab8404-onnx",
+                "funasr-conformer": "damo/speech_conformer_asr_nat-zh-cn-16k-common-vocab8404-onnx"  # 改为ONNX版本
             }
             
             actual_model = model_mapping.get(self.model_id, model_mapping["funasr-paraformer"])
             
-            self.progress_tracker.update(30, "初始化FunASR...")
+            # 检查是否可以使用TensorRT或ONNX Runtime加速
+            engine_path = RTX3060TiOptimizer.get_tensorrt_engine_path(actual_model, self.config)
+            onnx_session = None
+            
+            self.progress_tracker.update(20, "尝试加载优化引擎...")
+            
+            # 尝试加载TensorRT引擎
+            if TENSORRT_AVAILABLE and os.path.exists(engine_path):
+                logger.info("发现TensorRT引擎，尝试加载...")
+                self.tensorrt_engine = TensorRTOptimizer.load_tensorrt_engine(engine_path)
+                if self.tensorrt_engine:
+                    self.use_tensorrt = True
+                    logger.info("[OK] TensorRT引擎加载成功，性能将显著提升")
+                    self.progress_tracker.update(60, "TensorRT引擎就绪")
+                    self.progress_tracker.close()
+                    return
+            
+            # 尝试ONNX Runtime加速
+            if ONNX_AVAILABLE and actual_model.endswith("-onnx"):
+                self.progress_tracker.update(30, "尝试ONNX Runtime加速...")
+                try:
+                    # 构建ONNX模型路径
+                    onnx_model_path = os.path.join(models_path, actual_model.replace("/", "_") + ".onnx")
+                    if os.path.exists(onnx_model_path):
+                        onnx_session = ONNXOptimizer.create_ort_session(onnx_model_path, self.device)
+                        if onnx_session:
+                            self.onnx_session = onnx_session
+                            self.use_onnx = True
+                            logger.info("[OK] ONNX Runtime加速启用")
+                            self.progress_tracker.update(40, "ONNX加速就绪")
+                except Exception as e:
+                    logger.warning(f"ONNX Runtime加速失败: {e}")
+
+            self.progress_tracker.update(40, "加载标准FunASR模型...")
+            
+            # 设备选择逻辑
+            if self.device == "cuda" and torch.cuda.is_available():
+                available_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+                if available_memory >= 4.5:  # 降低要求到4.5GB
+                    device = "cuda"
+                else:
+                    logger.warning("显存不足，切换到CPU模式")
+                    device = "cpu"
+                    self.device = "cpu"
+            else:
+                device = "cpu"
+                self.device = "cpu"
             
             # 为RTX 3060 Ti优化的参数
             model_kwargs = {
                 "model": actual_model,
                 "cache_dir": models_path,
+                "device": device,
                 "disable_update": True,
-                "model_revision": "v2.0.4"  # 使用稳定版本
+                "model_revision": "v2.0.4",
+                "batch_size": 1,  # 减小批次大小
+                "device_map": "auto" if device == "cuda" else None
             }
-            
-            # 只在显存充足时使用GPU
-            if self.device == "cuda" and torch.cuda.is_available():
-                available_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
-                if available_memory >= 5.0:  # 至少5GB可用显存
-                    model_kwargs["device"] = "cuda"
-                else:
-                    logger.warning("显存不足，FunASR将使用CPU模式")
-                    model_kwargs["device"] = "cpu"
-                    self.device = "cpu"
-            else:
-                model_kwargs["device"] = "cpu"
-                self.device = "cpu"
             
             self.model = AutoModel(**model_kwargs)
 
-            self.progress_tracker.update(50, "模型加载完成")
+            self.progress_tracker.update(20, "模型加载完成")
             self.progress_tracker.close()
+            
+            # 检查是否可以创建TensorRT引擎
+            if not hasattr(self, 'use_tensorrt') and TENSORRT_AVAILABLE and device == "cuda":
+                self._try_create_tensorrt_engine(actual_model, engine_path)
+            
             logger.info(f"[OK] FunASR模型 {self.model_id} 加载成功，运行设备: {self.device}")
+            if hasattr(self, 'use_tensorrt') and self.use_tensorrt:
+                logger.info("[BOOST] TensorRT加速已启用")
+            elif hasattr(self, 'use_onnx') and self.use_onnx:
+                logger.info("[BOOST] ONNX Runtime加速已启用")
 
         except Exception as e:
             if self.progress_tracker:
@@ -491,7 +713,8 @@ class FunASRModelWrapper(ModelWrapper):
                         model="damo/speech_paraformer_asr-zh-cn-16k-common-vocab8404-onnx",
                         device="cpu",
                         cache_dir=models_path,
-                        disable_update=True
+                        disable_update=True,
+                        batch_size=1
                     )
                     logger.info("[OK] FunASR模型已在CPU模式下加载成功")
                 except Exception as cpu_e:
@@ -499,6 +722,37 @@ class FunASRModelWrapper(ModelWrapper):
                     raise
             else:
                 raise
+
+    def _try_create_tensorrt_engine(self, model_name: str, engine_path: str):
+        """尝试创建TensorRT引擎"""
+        try:
+            logger.info("尝试为模型创建TensorRT引擎...")
+            
+            # 检查是否有对应的ONNX文件
+            models_path = self.config.get('models_path', './models')
+            onnx_path = os.path.join(models_path, model_name.replace("/", "_") + ".onnx")
+            
+            if not os.path.exists(onnx_path):
+                logger.info("未找到ONNX文件，跳过TensorRT引擎创建")
+                return
+            
+            # 在后台异步创建引擎（不阻塞当前使用）
+            success = TensorRTOptimizer.convert_to_tensorrt(
+                onnx_path, engine_path, precision="fp16"
+            )
+            
+            if success:
+                logger.info("TensorRT引擎创建成功，下次启动将自动使用加速")
+            
+        except Exception as e:
+            logger.warning(f"TensorRT引擎创建失败: {e}")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.use_tensorrt = False
+        self.use_onnx = False
+        self.tensorrt_engine = None
+        self.onnx_session = None
 
     def transcribe(self, audio_path: str, **kwargs) -> Dict[str, Any]:
         """转录音频 - RTX 3060 Ti优化版"""

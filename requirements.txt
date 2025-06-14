@@ -34,9 +34,14 @@ psutil>=5.9.0
 jieba>=0.42.1
 cn2an>=0.5.23
 
-# 可选依赖 (GPU加速)
-# tensorrt>=8.6.0  # 需要NVIDIA账号
-# pycuda>=2022.1   # 需要CUDA环境
+# GPU加速依赖
+onnx>=1.14.0
+onnxruntime-gpu>=1.16.0
+onnxsim>=0.4.0
+pycuda>=2022.1
+
+# TensorRT (可选，需要NVIDIA开发者账号)
+# tensorrt>=8.6.0
 
 # 开发工具
 pytest>=7.4.0
