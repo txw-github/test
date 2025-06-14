@@ -1,3 +1,4 @@
+
 import os
 import sys
 import time
@@ -15,6 +16,7 @@ import soundfile as sf
 import gc
 from tqdm import tqdm
 import psutil
+import json
 
 # 配置日志
 logging.basicConfig(
@@ -57,21 +59,63 @@ except ImportError:
     TENSORRT_AVAILABLE = False
     logger.warning("TensorRT不可用，将使用PyTorch加速")
 
-# 暂时禁用ModelScope以避免版本冲突
-try:
-    from modelscope.models.audio.asr import FireRedAsr
-    FIRERED_AVAILABLE = True
-    # FIRERED_AVAILABLE = False
-    # logger.warning("ModelScope暂时禁用以避免版本冲突，FireRedASR功能暂不可用")
-except ImportError:
-    FIRERED_AVAILABLE = False
-
 try:
     from moviepy.editor import VideoFileClip
     MOVIEPY_AVAILABLE = True
 except ImportError:
     MOVIEPY_AVAILABLE = False
     logger.warning("MoviePy未安装，将使用FFmpeg处理音频")
+
+class Config:
+    """配置管理类"""
+    def __init__(self):
+        self.config_file = "config.json"
+        self.load_config()
+    
+    def load_config(self):
+        """加载配置文件"""
+        default_config = {
+            "models_path": "./models",
+            "temp_path": "./temp",
+            "output_path": "./output",
+            "gpu_memory_fraction": 0.85,
+            "batch_size": 4,
+            "max_segment_length": 30,
+            "preferred_model": "faster-base",
+            "use_tensorrt": True,
+            "audio_sample_rate": 16000
+        }
+        
+        if os.path.exists(self.config_file):
+            try:
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    # 合并默认配置和用户配置
+                    for key, value in default_config.items():
+                        if key not in config:
+                            config[key] = value
+                    self.config = config
+            except Exception as e:
+                logger.warning(f"配置文件加载失败，使用默认配置: {e}")
+                self.config = default_config
+        else:
+            self.config = default_config
+            self.save_config()
+    
+    def save_config(self):
+        """保存配置文件"""
+        try:
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                json.dump(self.config, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"配置文件保存失败: {e}")
+    
+    def get(self, key, default=None):
+        return self.config.get(key, default)
+    
+    def set(self, key, value):
+        self.config[key] = value
+        self.save_config()
 
 class Timer:
     """计时器类"""
@@ -80,30 +124,51 @@ class Timer:
 
     def __enter__(self):
         self.start_time = time.time()
-        print(f"开始 {self.name}...")
+        print(f"🚀 开始 {self.name}...")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         end_time = time.time()
         duration = end_time - self.start_time
-        print(f"{self.name} 完成，耗时: {duration:.2f} 秒")
+        print(f"✅ {self.name} 完成，耗时: {duration:.2f} 秒")
+
+class ProgressTracker:
+    """进度跟踪器"""
+    def __init__(self, total_steps=100, description="处理中"):
+        self.total_steps = total_steps
+        self.current_step = 0
+        self.description = description
+        self.pbar = tqdm(total=total_steps, desc=description, unit="step")
+    
+    def update(self, steps=1, description=None):
+        if description:
+            self.pbar.set_description(description)
+        self.pbar.update(steps)
+        self.current_step += steps
+    
+    def set_progress(self, current, total=None, description=None):
+        if total:
+            self.pbar.total = total
+        if description:
+            self.pbar.set_description(description)
+        self.pbar.n = current
+        self.pbar.refresh()
+    
+    def close(self):
+        self.pbar.close()
 
 class RTX3060TiOptimizer:
     """RTX 3060 Ti显卡优化器"""
 
     @staticmethod
-    def setup_gpu_memory():
+    def setup_gpu_memory(memory_fraction=0.85):
         """配置GPU显存管理"""
         if torch.cuda.is_available():
-            # 设置显存增长策略
             torch.cuda.empty_cache()
-            # 预留一些显存给系统
             try:
-                # 获取总显存
                 total_memory = torch.cuda.get_device_properties(0).total_memory
-                # RTX 3060 Ti有6GB显存，预留1GB给系统
-                max_memory = int(total_memory * 0.85)  # 使用85%显存
-                torch.cuda.set_per_process_memory_fraction(0.85)
+                max_memory = int(total_memory * memory_fraction)
+                torch.cuda.set_per_process_memory_fraction(memory_fraction)
                 logger.info(f"GPU显存优化完成，总显存: {total_memory/1024**3:.1f}GB，预留使用: {max_memory/1024**3:.1f}GB")
             except Exception as e:
                 logger.warning(f"显存优化失败: {e}")
@@ -112,7 +177,6 @@ class RTX3060TiOptimizer:
     def get_optimal_batch_size():
         """获取最优批处理大小"""
         if torch.cuda.is_available():
-            # RTX 3060 Ti 6GB显存的推荐设置
             total_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
             if total_memory > 5.5:  # 6GB显卡
                 return 4
@@ -126,20 +190,19 @@ class SystemChecker:
     def check_cuda():
         """检查CUDA环境"""
         if not torch.cuda.is_available():
-            logger.error("CUDA不可用！请检查NVIDIA驱动和CUDA安装")
+            logger.error("❌ CUDA不可用！请检查NVIDIA驱动和CUDA安装")
             return False
 
         cuda_version = torch.version.cuda
         gpu_name = torch.cuda.get_device_name(0)
         gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
 
-        logger.info(f"CUDA版本: {cuda_version}")
-        logger.info(f"GPU: {gpu_name}")
-        logger.info(f"GPU显存: {gpu_memory:.2f} GB")
+        logger.info(f"✅ CUDA版本: {cuda_version}")
+        logger.info(f"✅ GPU: {gpu_name}")
+        logger.info(f"✅ GPU显存: {gpu_memory:.2f} GB")
 
-        # 特别检查RTX 3060 Ti
         if "3060 Ti" in gpu_name:
-            logger.info("检测到RTX 3060 Ti，已启用优化配置")
+            logger.info("🎯 检测到RTX 3060 Ti，已启用优化配置")
             RTX3060TiOptimizer.setup_gpu_memory()
 
         return True
@@ -157,23 +220,24 @@ class SystemChecker:
 
         missing = [name for name, available in deps.items() if not available]
         if missing:
-            logger.warning(f"可选依赖缺失: {', '.join(missing)}")
+            logger.warning(f"⚠️ 可选依赖缺失: {', '.join(missing)}")
 
-        # 检查必需依赖
         required = ["torch", "whisper"]
         missing_required = [name for name in required if not deps.get(name, False)]
         if missing_required:
-            logger.error(f"缺少必需依赖: {', '.join(missing_required)}")
+            logger.error(f"❌ 缺少必需依赖: {', '.join(missing_required)}")
             return False
         return True
 
 class ModelWrapper:
     """模型包装基类"""
-    def __init__(self, model_id: str, device: str = "cuda", **kwargs):
+    def __init__(self, model_id: str, device: str = "cuda", config: Config = None, **kwargs):
         self.model_id = model_id
         self.device = device
+        self.config = config or Config()
         self.kwargs = kwargs
         self.model = None
+        self.progress_tracker = None
 
     def load_model(self):
         raise NotImplementedError
@@ -192,44 +256,58 @@ class WhisperModelWrapper(ModelWrapper):
     def load_model(self) -> None:
         """加载模型"""
         try:
+            self.progress_tracker = ProgressTracker(100, f"加载{self.model_id}模型")
+            
             if self.device == "cuda" and torch.cuda.is_available():
-                RTX3060TiOptimizer.setup_gpu_memory()
+                RTX3060TiOptimizer.setup_gpu_memory(self.config.get('gpu_memory_fraction', 0.85))
 
-            # 使用faster-whisper进行优化
+            models_path = self.config.get('models_path', './models')
+            os.makedirs(models_path, exist_ok=True)
+            
+            self.progress_tracker.update(20, "下载模型文件...")
+
             if self.model_id in ["faster-base", "faster-large"]:
-                # 映射faster模型名到实际模型名
                 model_mapping = {
                     "faster-base": "base",
                     "faster-large": "large"
                 }
                 actual_model = model_mapping[self.model_id]
-                logger.info(f"加载Faster-Whisper模型: {self.model_id} -> {actual_model}")
+                logger.info(f"🔄 加载Faster-Whisper模型: {self.model_id} -> {actual_model}")
 
+                self.progress_tracker.update(30, "初始化Faster-Whisper...")
                 self.model = WhisperModel(
                     actual_model,
                     device=self.device,
                     compute_type="float16" if self.device == "cuda" else "int8",
                     cpu_threads=4,
-                    download_root="./models"
+                    download_root=models_path
                 )
             else:
-                # 标准whisper模型
-                logger.info(f"加载标准Whisper模型: {self.model_id}")
+                logger.info(f"🔄 加载标准Whisper模型: {self.model_id}")
+                self.progress_tracker.update(30, "初始化Whisper...")
                 import whisper
-                self.model = whisper.load_model(self.model_id, download_root="./models")
+                self.model = whisper.load_model(self.model_id, download_root=models_path)
 
                 if self.device == "cuda":
                     self.model = self.model.cuda()
 
+            self.progress_tracker.update(50, "模型加载完成")
+            self.progress_tracker.close()
+            logger.info(f"✅ 模型 {self.model_id} 加载成功")
+
         except Exception as e:
-            logger.error(f"模型加载失败: {e}")
+            if self.progress_tracker:
+                self.progress_tracker.close()
+            logger.error(f"❌ 模型加载失败: {e}")
             raise
 
     def transcribe(self, audio_path: str, **kwargs) -> Dict[str, Any]:
         """转录音频"""
         try:
+            progress = ProgressTracker(100, "音频转录中")
+            
             if self.model_id in ["faster-base", "faster-large"]:
-                # Faster-Whisper转录
+                progress.update(10, "开始Faster-Whisper转录...")
                 segments, info = self.model.transcribe(
                     audio_path,
                     language="zh",
@@ -244,237 +322,157 @@ class WhisperModelWrapper(ModelWrapper):
                     vad_parameters=dict(min_silence_duration_ms=500)
                 )
 
-                # 转换为标准格式
+                progress.update(60, "处理转录结果...")
                 result = {
                     "text": "",
                     "segments": [],
                     "language": info.language
                 }
 
-                for segment in segments:
+                for i, segment in enumerate(segments):
                     result["segments"].append({
                         "start": segment.start,
                         "end": segment.end,
                         "text": segment.text.strip()
                     })
                     result["text"] += segment.text.strip() + " "
+                    if i % 10 == 0:
+                        progress.update(2, f"处理片段 {i+1}")
 
-                return result
             else:
-                # 标准Whisper转录
+                progress.update(10, "开始标准Whisper转录...")
                 result = self.model.transcribe(
                     audio_path,
                     language="zh",
                     fp16=torch.cuda.is_available(),
                     verbose=False
                 )
-                return result
+                progress.update(80, "转录完成")
+
+            progress.close()
+            return result
 
         except Exception as e:
-            logger.error(f"转录失败: {e}")
+            logger.error(f"❌ 转录失败: {e}")
             raise
-
-class FireRedModelWrapper(ModelWrapper):
-    """FireRedASR模型包装"""
-    def load_model(self):
-        if not FIRERED_AVAILABLE:
-            raise ImportError("FireRedASR不可用，请安装modelscope")
-
-        logger.info(f"加载FireRedASR模型: {self.model_id}")
-        # 解析模型类型：firered-aed 或 firered-llm
-        model_type = self.model_id.split("-")[-1] if "-" in self.model_id else "aed"
-
-        try:
-            # 使用ModelScope的预训练模型
-            if model_type.lower() == "aed":
-                model_name = "pengzhendong/FireRedASR-AED-L"
-            elif model_type.lower() == "llm":
-                model_name = "pengzhendong/FireRedASR-LLM-L"
-            else:
-                model_name = "pengzhendong/FireRedASR-AED-L"  # 默认使用AED
-
-            self.model = FireRedAsr.from_pretrained(model_name)
-            if self.device == "cuda" and torch.cuda.is_available():
-                self.model = self.model.cuda()
-
-            logger.info("FireRedASR模型加载完成")
-            if self.device == "cuda":
-                logger.info(f"当前显存使用: {self.get_gpu_memory_usage():.1f}MB")
-
-        except Exception as e:
-            logger.error(f"FireRedASR模型加载失败: {e}")
-            raise
-
-    def transcribe(self, audio_path: str, **kwargs) -> Dict[str, Any]:
-        if not os.path.exists(audio_path):
-            logger.error(f"音频文件不存在: {audio_path}")
-            return {"segments": [], "language": "zh"}
-
-        try:
-            # FireRedASR转录
-            result = self.model.transcribe(
-                batch_uttid=["single"],
-                batch_wav_path=[audio_path],
-                args={
-                    "gpu": 1 if self.device == "cuda" else 0,
-                    "compute_type": "float16" if self.device == "cuda" else "float32"
-                }
-            )
-
-            # 获取音频时长
-            duration = self.get_audio_duration(audio_path)
-
-            # 转换为标准格式
-            segments = []
-            if result and len(result) > 0:
-                text = result[0].get("text", "").strip()
-                if text:
-                    segments = [{
-                        "start": 0.0,
-                        "end": duration,
-                        "text": text
-                    }]
-
-            return {"segments": segments, "language": "zh"}
-
-        except torch.cuda.OutOfMemoryError:
-            logger.warning("显存不足，尝试释放显存后重试...")
-            torch.cuda.empty_cache()
-            gc.collect()
-            # 使用CPU重试
-            try:
-                result = self.model.cpu().transcribe(
-                    batch_uttid=["single"],
-                    batch_wav_path=[audio_path],
-                    args={"gpu": 0, "compute_type": "float32"}
-                )
-                duration = self.get_audio_duration(audio_path)
-                segments = []
-                if result and len(result) > 0:
-                    text = result[0].get("text", "").strip()
-                    if text:
-                        segments = [{"start": 0.0, "end": duration, "text": text}]
-                return {"segments": segments, "language": "zh"}
-            except Exception as e:
-                logger.error(f"CPU模式FireRedASR转录也失败: {e}")
-                return {"segments": [], "language": "zh"}
-        except Exception as e:
-            logger.error(f"FireRedASR转录失败: {e}")
-            return {"segments": [], "language": "zh"}
-
-    def get_audio_duration(self, audio_path: str) -> float:
-        """获取音频时长"""
-        try:
-            import librosa
-            return librosa.get_duration(path=audio_path)
-        except ImportError:
-            try:
-                import soundfile as sf
-                data, samplerate = sf.read(audio_path)
-                return len(data) / samplerate
-            except:
-                logger.warning("无法获取音频时长，使用默认值")
-                return 60.0  # 默认60秒
-        except Exception as e:
-            logger.warning(f"获取音频时长失败: {e}")
-            return 60.0
-
-class ModelFactory:
-    """模型工厂"""
-    @staticmethod
-    def create_model(model_id: str, device: str = "cuda", **kwargs) -> ModelWrapper:
-        # 支持的模型列表
-        whisper_models = ["tiny", "base", "small", "medium", "large", "faster-base", "faster-large"]
-        firered_models = ["firered-aed", "firered-llm"]
-        
-        if (model_id in whisper_models or 
-            "whisper" in model_id.lower() or
-            model_id.startswith("faster-")):
-            return WhisperModelWrapper(model_id, device, **kwargs)
-        elif model_id in firered_models or "firered" in model_id.lower():
-            return FireRedModelWrapper(model_id, device, **kwargs)
-        else:
-            supported_models = whisper_models + firered_models
-            raise ValueError(f"不支持的模型: {model_id}。支持的模型: {', '.join(supported_models)}")
 
 class VideoSubtitleExtractor:
     """视频字幕提取器"""
-    def __init__(self, model_id: str = "base", device: str = "cuda", **kwargs):
+    def __init__(self, model_id: str = "faster-base", device: str = "cuda", config: Config = None, **kwargs):
+        self.config = config or Config()
         self.device = device
         self.kwargs = kwargs
 
         # 检查系统
         if not SystemChecker.check_cuda():
             self.device = "cpu"
-            logger.warning("CUDA不可用，使用CPU模式")
+            logger.warning("⚠️ CUDA不可用，使用CPU模式")
 
         # 初始化模型
-        self.model_wrapper = ModelFactory.create_model(model_id, device=self.device, **kwargs)
-        self.model_wrapper.load_model()
+        self.model_wrapper = self._create_model(model_id)
+        
+    def _create_model(self, model_id: str):
+        """创建模型实例"""
+        if model_id in ["tiny", "base", "small", "medium", "large", "faster-base", "faster-large"]:
+            return WhisperModelWrapper(model_id, self.device, self.config, **self.kwargs)
+        else:
+            raise ValueError(f"不支持的模型: {model_id}")
 
     def extract_audio(self, video_path: str, audio_path: str = None) -> Optional[str]:
         """从视频提取音频"""
         if not audio_path:
             base_name = os.path.splitext(os.path.basename(video_path))[0]
-            audio_path = f"{base_name}_audio.wav"
+            temp_path = self.config.get('temp_path', './temp')
+            os.makedirs(temp_path, exist_ok=True)
+            audio_path = os.path.join(temp_path, f"{base_name}_audio.wav")
 
         if not os.path.exists(video_path):
-            logger.error(f"视频文件不存在: {video_path}")
+            logger.error(f"❌ 视频文件不存在: {video_path}")
             return None
 
         try:
+            progress = ProgressTracker(100, "提取音频")
+            
             with Timer("音频提取"):
+                progress.update(10, "检查视频文件...")
+                
                 if MOVIEPY_AVAILABLE:
-                    # 使用moviepy
+                    progress.update(20, "使用MoviePy提取音频...")
                     video = VideoFileClip(video_path)
                     audio = video.audio
-                    audio.write_audiofile(audio_path, fps=16000, verbose=False, logger=None)
+                    progress.update(30, "写入音频文件...")
+                    audio.write_audiofile(
+                        audio_path, 
+                        fps=self.config.get('audio_sample_rate', 16000), 
+                        verbose=False, 
+                        logger=None
+                    )
+                    progress.update(30, "清理资源...")
                     video.close()
                     audio.close()
                 else:
-                    # 使用ffmpeg
+                    progress.update(20, "使用FFmpeg提取音频...")
                     cmd = [
                         "ffmpeg", "-y", "-i", video_path,
-                        "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
-                        audio_path
+                        "-vn", "-acodec", "pcm_s16le", 
+                        "-ar", str(self.config.get('audio_sample_rate', 16000)), 
+                        "-ac", "1", audio_path
                     ]
-                    result = subprocess.run(cmd, check=True, capture_output=True)
-                    if result.returncode != 0:
-                        logger.error("FFmpeg音频提取失败")
-                        return None
+                    subprocess.run(cmd, check=True, capture_output=True)
+                    progress.update(60, "音频提取完成")
 
-            if os.path.exists(audio_path):
-                logger.info(f"音频提取成功: {audio_path}")
-                return audio_path
-            else:
-                logger.error("音频提取失败")
-                return None
+                progress.update(10, "验证音频文件...")
+                if os.path.exists(audio_path):
+                    file_size = os.path.getsize(audio_path) / 1024 / 1024
+                    progress.close()
+                    logger.info(f"✅ 音频提取成功: {audio_path} ({file_size:.1f}MB)")
+                    return audio_path
+                else:
+                    progress.close()
+                    logger.error("❌ 音频提取失败")
+                    return None
 
         except Exception as e:
-            logger.error(f"音频提取出错: {e}")
+            logger.error(f"❌ 音频提取出错: {e}")
             return None
 
     def transcribe_audio(self, audio_path: str, **kwargs) -> Dict[str, Any]:
         """转录音频"""
         if not os.path.exists(audio_path):
-            logger.error(f"音频文件不存在: {audio_path}")
+            logger.error(f"❌ 音频文件不存在: {audio_path}")
             return {"segments": [], "language": None}
 
         try:
+            # 加载模型
+            if self.model_wrapper.model is None:
+                self.model_wrapper.load_model()
+            
             with Timer("音频转录"):
                 result = self.model_wrapper.transcribe(audio_path, **kwargs)
                 segment_count = len(result.get('segments', []))
-                logger.info(f"转录完成，识别到 {segment_count} 个片段")
+                logger.info(f"✅ 转录完成，识别到 {segment_count} 个片段")
+                
                 if self.device == "cuda":
-                    logger.info(f"转录后显存使用: {self.model_wrapper.get_gpu_memory_usage():.1f}MB")
+                    memory_usage = self.model_wrapper.get_gpu_memory_usage()
+                    logger.info(f"📊 转录后显存使用: {memory_usage:.1f}MB")
+                
                 return result
+                
         except Exception as e:
-            logger.error(f"音频转录失败: {e}")
+            logger.error(f"❌ 音频转录失败: {e}")
             return {"segments": [], "language": None}
 
     def create_srt_file(self, segments: List[Dict], output_path: str = "output.srt") -> str:
         """创建SRT字幕文件"""
         try:
+            progress = ProgressTracker(len(segments), "生成字幕文件")
+            
+            output_dir = self.config.get('output_path', './output')
+            os.makedirs(output_dir, exist_ok=True)
+            
+            if not output_path.startswith(output_dir):
+                output_path = os.path.join(output_dir, os.path.basename(output_path))
+
             with open(output_path, "w", encoding="utf-8") as f:
                 for i, segment in enumerate(segments, 1):
                     start_time = self._format_time(segment["start"])
@@ -484,11 +482,15 @@ class VideoSubtitleExtractor:
                     f.write(f"{i}\n")
                     f.write(f"{start_time} --> {end_time}\n")
                     f.write(f"{text}\n\n")
+                    
+                    progress.update(1, f"写入片段 {i}/{len(segments)}")
 
-            logger.info(f"SRT文件保存成功: {output_path}")
+            progress.close()
+            logger.info(f"✅ SRT文件保存成功: {output_path}")
             return output_path
+            
         except Exception as e:
-            logger.error(f"SRT文件创建失败: {e}")
+            logger.error(f"❌ SRT文件创建失败: {e}")
             return None
 
     def _format_time(self, seconds: float) -> str:
@@ -500,49 +502,63 @@ class VideoSubtitleExtractor:
 
     def cleanup(self):
         """清理临时文件和显存"""
-        # 清理临时文件
-        temp_files = [f for f in os.listdir(".") if f.endswith("_audio.wav")]
-        for file in temp_files:
-            try:
-                os.remove(file)
-                logger.info(f"删除临时文件: {file}")
-            except Exception as e:
-                logger.warning(f"删除临时文件失败 {file}: {e}")
+        try:
+            temp_path = self.config.get('temp_path', './temp')
+            if os.path.exists(temp_path):
+                temp_files = [f for f in os.listdir(temp_path) if f.endswith("_audio.wav")]
+                for file in temp_files:
+                    file_path = os.path.join(temp_path, file)
+                    try:
+                        os.remove(file_path)
+                        logger.info(f"🗑️ 删除临时文件: {file}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ 删除临时文件失败 {file}: {e}")
 
-        # 清理GPU显存
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            gc.collect()
+            # 清理GPU显存
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                gc.collect()
+                logger.info("🧹 GPU显存清理完成")
+                
+        except Exception as e:
+            logger.warning(f"⚠️ 清理过程中出现错误: {e}")
 
 def main():
-    parser = argparse.ArgumentParser(description="视频字幕提取工具 - RTX 3060 Ti优化版")
+    parser = argparse.ArgumentParser(description="中文电视剧音频转文字工具 - RTX 3060 Ti优化版")
     parser.add_argument("video_path", nargs='?', default="test.mp4", help="输入视频文件路径")
     parser.add_argument("--output", "-o", default="output.srt", help="输出字幕文件路径")
     parser.add_argument("--model", "-m", default="faster-base",
-                        choices=["tiny", "base", "small", "medium", "large", "faster-base", "faster-large", "firered-aed", "firered-llm"],
+                        choices=["tiny", "base", "small", "medium", "large", "faster-base", "faster-large"],
                         help="模型选择 (推荐RTX 3060 Ti使用faster-base)")
     parser.add_argument("--device", "-d", default="cuda", choices=["cuda", "cpu"], help="运行设备")
     parser.add_argument("--language", "-l", default="zh", help="语言设置")
     parser.add_argument("--keep-temp", action="store_true", help="保留临时文件")
+    parser.add_argument("--config", "-c", help="配置文件路径")
 
     args = parser.parse_args()
 
+    # 加载配置
+    config = Config()
+    if args.config and os.path.exists(args.config):
+        config.config_file = args.config
+        config.load_config()
+
     # 检查输入文件
     if not os.path.exists(args.video_path):
-        logger.error(f"视频文件不存在: {args.video_path}")
+        logger.error(f"❌ 视频文件不存在: {args.video_path}")
         return
 
     # 检查依赖
     if not SystemChecker.check_dependencies():
-        logger.error("请先运行install_dependencies.bat安装缺少的依赖")
+        logger.error("❌ 请先运行install_dependencies.bat安装缺少的依赖")
         return
 
-    logger.info(f"开始处理视频: {args.video_path}")
-    logger.info(f"使用模型: {args.model}")
-    logger.info(f"运行设备: {args.device}")
+    logger.info(f"🎬 开始处理视频: {args.video_path}")
+    logger.info(f"🤖 使用模型: {args.model}")
+    logger.info(f"💻 运行设备: {args.device}")
 
     if args.model in ["medium", "large"] and args.device == "cuda":
-        logger.warning("RTX 3060 Ti显存可能不足以运行medium/large模型，建议使用faster-base")
+        logger.warning("⚠️ RTX 3060 Ti显存可能不足以运行medium/large模型，建议使用faster-base")
 
     extractor = None
     try:
@@ -550,13 +566,13 @@ def main():
         extractor = VideoSubtitleExtractor(
             model_id=args.model,
             device=args.device,
-            download_root="models"
+            config=config
         )
 
         # 提取音频
         audio_path = extractor.extract_audio(args.video_path)
         if not audio_path:
-            logger.error("音频提取失败")
+            logger.error("❌ 音频提取失败")
             return
 
         # 转录音频
@@ -567,19 +583,19 @@ def main():
         )
 
         if not result["segments"]:
-            logger.warning("未识别到任何语音内容")
+            logger.warning("⚠️ 未识别到任何语音内容")
             return
 
         # 创建字幕文件
         srt_path = extractor.create_srt_file(result["segments"], args.output)
         if srt_path:
-            logger.info(f"字幕提取完成！文件保存至: {srt_path}")
-            logger.info(f"共识别到 {len(result['segments'])} 个字幕片段")
+            logger.info(f"🎉 字幕提取完成！文件保存至: {srt_path}")
+            logger.info(f"📝 共识别到 {len(result['segments'])} 个字幕片段")
         else:
-            logger.error("字幕文件创建失败")
+            logger.error("❌ 字幕文件创建失败")
 
     except Exception as e:
-        logger.error(f"处理过程中发生错误: {e}")
+        logger.error(f"❌ 处理过程中发生错误: {e}")
         traceback.print_exc()
 
     finally:
@@ -588,7 +604,7 @@ def main():
             if extractor is not None and not args.keep_temp:
                 extractor.cleanup()
         except Exception as e:
-            logger.warning(f"清理过程中出现错误: {e}")
+            logger.warning(f"⚠️ 清理过程中出现错误: {e}")
 
 if __name__ == "__main__":
     main()
