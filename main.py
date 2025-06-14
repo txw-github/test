@@ -189,74 +189,90 @@ class ModelWrapper:
 
 class WhisperModelWrapper(ModelWrapper):
     """Whisper模型包装"""
-    def load_model(self):
-        logger.info(f"加载Whisper模型: {self.model_id}")
+    def load_model(self) -> None:
+        """加载模型"""
+        try:
+            if self.device == "cuda" and torch.cuda.is_available():
+                RTX3060TiOptimizer.setup_gpu_memory()
 
-        # 根据RTX 3060 Ti优化设置
-        batch_size = RTX3060TiOptimizer.get_optimal_batch_size()
+            # 使用faster-whisper进行优化
+            if self.model_id in ["faster-base", "faster-large"]:
+                # 映射faster模型名到实际模型名
+                model_mapping = {
+                    "faster-base": "base",
+                    "faster-large": "large"
+                }
+                actual_model = model_mapping[self.model_id]
+                logger.info(f"加载Faster-Whisper模型: {self.model_id} -> {actual_model}")
 
-        if "faster" in self.model_id:
-            # 使用faster-whisper，RTX 3060 Ti优化设置
-            model_size = self.model_id.replace("faster-", "")
-            self.model = WhisperModel(
-                model_size,
-                device=self.device,
-                compute_type="float16" if self.device == "cuda" else "float32",
-                download_root=self.kwargs.get("download_root", "models"),
-                cpu_threads=4,
-                num_workers=1,  # RTX 3060 Ti单GPU优化
-            )
-        else:
-            # 使用原版whisper
-            self.model = whisper.load_model(
-                self.model_id,
-                device=self.device,
-                download_root=self.kwargs.get("download_root", "models")
-            )
+                self.model = WhisperModel(
+                    actual_model,
+                    device=self.device,
+                    compute_type="float16" if self.device == "cuda" else "int8",
+                    cpu_threads=4,
+                    download_root="./models"
+                )
+            else:
+                # 标准whisper模型
+                logger.info(f"加载标准Whisper模型: {self.model_id}")
+                import whisper
+                self.model = whisper.load_model(self.model_id, download_root="./models")
 
-        logger.info("Whisper模型加载完成")
-        if self.device == "cuda":
-            logger.info(f"当前显存使用: {self.get_gpu_memory_usage():.1f}MB")
+                if self.device == "cuda":
+                    self.model = self.model.cuda()
+
+        except Exception as e:
+            logger.error(f"模型加载失败: {e}")
+            raise
 
     def transcribe(self, audio_path: str, **kwargs) -> Dict[str, Any]:
+        """转录音频"""
         try:
-            # RTX 3060 Ti优化参数
-            if "faster" in self.model_id:
-                # Faster-Whisper设置
+            if self.model_id in ["faster-base", "faster-large"]:
+                # Faster-Whisper转录
                 segments, info = self.model.transcribe(
-                    audio_path, 
-                    beam_size=5,  # 减少beam size以节省显存
-                    best_of=5,
+                    audio_path,
+                    language="zh",
+                    beam_size=1,
+                    best_of=1,
                     temperature=0.0,
-                    **kwargs
+                    compression_ratio_threshold=2.4,
+                    log_prob_threshold=-1.0,
+                    no_speech_threshold=0.6,
+                    condition_on_previous_text=False,
+                    vad_filter=True,
+                    vad_parameters=dict(min_silence_duration_ms=500)
                 )
-                return {"segments": list(segments), "language": info.language}
+
+                # 转换为标准格式
+                result = {
+                    "text": "",
+                    "segments": [],
+                    "language": info.language
+                }
+
+                for segment in segments:
+                    result["segments"].append({
+                        "start": segment.start,
+                        "end": segment.end,
+                        "text": segment.text.strip()
+                    })
+                    result["text"] += segment.text.strip() + " "
+
+                return result
             else:
-                # 原版Whisper设置
+                # 标准Whisper转录
                 result = self.model.transcribe(
-                    audio_path, 
-                    temperature=0.0,
-                    **kwargs
+                    audio_path,
+                    language="zh",
+                    fp16=torch.cuda.is_available(),
+                    verbose=False
                 )
                 return result
-        except torch.cuda.OutOfMemoryError:
-            logger.warning("显存不足，尝试释放显存后重试...")
-            torch.cuda.empty_cache()
-            gc.collect()
-            # 使用更保守的设置重试
-            if "faster" in self.model_id:
-                segments, info = self.model.transcribe(
-                    audio_path, 
-                    beam_size=1,  # 最小beam size
-                    **kwargs
-                )
-                return {"segments": list(segments), "language": info.language}
-            else:
-                result = self.model.transcribe(audio_path, **kwargs)
-                return result
+
         except Exception as e:
-            logger.error(f"Whisper转录失败: {e}")
-            return {"segments": [], "language": None}
+            logger.error(f"转录失败: {e}")
+            raise
 
 class FireRedModelWrapper(ModelWrapper):
     """FireRedASR模型包装"""
