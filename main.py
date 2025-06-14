@@ -28,9 +28,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 设置CUDA环境变量
+# 设置CUDA环境变量优化RTX 3060 Ti
 os.environ['CUDA_LAZY_LOADING'] = '1'
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True,garbage_collection_threshold:0.8'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 # 尝试导入依赖
 try:
@@ -39,12 +40,14 @@ try:
     WHISPER_AVAILABLE = True
 except ImportError:
     WHISPER_AVAILABLE = False
+    logger.warning("Whisper库未安装")
 
 try:
     from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
     HF_AVAILABLE = True
 except ImportError:
     HF_AVAILABLE = False
+    logger.warning("Transformers库未安装")
 
 try:
     import tensorrt as trt
@@ -53,10 +56,13 @@ try:
     TENSORRT_AVAILABLE = True
 except ImportError:
     TENSORRT_AVAILABLE = False
+    logger.warning("TensorRT不可用，将使用PyTorch加速")
 
+# 暂时禁用ModelScope以避免版本冲突
 try:
-    from modelscope.models.audio.asr import FireRedAsr
-    FIRERED_AVAILABLE = True
+    # from modelscope.models.audio.asr import FireRedAsr
+    FIRERED_AVAILABLE = False
+    logger.warning("ModelScope暂时禁用以避免版本冲突，FireRedASR功能暂不可用")
 except ImportError:
     FIRERED_AVAILABLE = False
 
@@ -65,6 +71,7 @@ try:
     MOVIEPY_AVAILABLE = True
 except ImportError:
     MOVIEPY_AVAILABLE = False
+    logger.warning("MoviePy未安装，将使用FFmpeg处理音频")
 
 class Timer:
     """计时器类"""
@@ -80,6 +87,38 @@ class Timer:
         end_time = time.time()
         duration = end_time - self.start_time
         print(f"{self.name} 完成，耗时: {duration:.2f} 秒")
+
+class RTX3060TiOptimizer:
+    """RTX 3060 Ti显卡优化器"""
+    
+    @staticmethod
+    def setup_gpu_memory():
+        """配置GPU显存管理"""
+        if torch.cuda.is_available():
+            # 设置显存增长策略
+            torch.cuda.empty_cache()
+            # 预留一些显存给系统
+            try:
+                # 获取总显存
+                total_memory = torch.cuda.get_device_properties(0).total_memory
+                # RTX 3060 Ti有6GB显存，预留1GB给系统
+                max_memory = int(total_memory * 0.85)  # 使用85%显存
+                torch.cuda.set_per_process_memory_fraction(0.85)
+                logger.info(f"GPU显存优化完成，总显存: {total_memory/1024**3:.1f}GB，预留使用: {max_memory/1024**3:.1f}GB")
+            except Exception as e:
+                logger.warning(f"显存优化失败: {e}")
+    
+    @staticmethod
+    def get_optimal_batch_size():
+        """获取最优批处理大小"""
+        if torch.cuda.is_available():
+            # RTX 3060 Ti 6GB显存的推荐设置
+            total_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            if total_memory > 5.5:  # 6GB显卡
+                return 4
+            else:
+                return 2
+        return 1
 
 class SystemChecker:
     """系统检查器"""
@@ -98,22 +137,33 @@ class SystemChecker:
         logger.info(f"GPU: {gpu_name}")
         logger.info(f"GPU显存: {gpu_memory:.2f} GB")
         
+        # 特别检查RTX 3060 Ti
+        if "3060 Ti" in gpu_name:
+            logger.info("检测到RTX 3060 Ti，已启用优化配置")
+            RTX3060TiOptimizer.setup_gpu_memory()
+        
         return True
     
     @staticmethod
     def check_dependencies():
         """检查依赖是否安装"""
         deps = {
+            "torch": True,
             "whisper": WHISPER_AVAILABLE,
             "transformers": HF_AVAILABLE,
             "tensorrt": TENSORRT_AVAILABLE,
-            "firered": FIRERED_AVAILABLE,
             "moviepy": MOVIEPY_AVAILABLE
         }
         
         missing = [name for name, available in deps.items() if not available]
         if missing:
-            logger.warning(f"缺少依赖: {', '.join(missing)}")
+            logger.warning(f"可选依赖缺失: {', '.join(missing)}")
+        
+        # 检查必需依赖
+        required = ["torch", "whisper"]
+        missing_required = [name for name in required if not deps.get(name, False)]
+        if missing_required:
+            logger.error(f"缺少必需依赖: {', '.join(missing_required)}")
             return False
         return True
 
@@ -141,13 +191,20 @@ class WhisperModelWrapper(ModelWrapper):
     """Whisper模型包装"""
     def load_model(self):
         logger.info(f"加载Whisper模型: {self.model_id}")
+        
+        # 根据RTX 3060 Ti优化设置
+        batch_size = RTX3060TiOptimizer.get_optimal_batch_size()
+        
         if "faster" in self.model_id:
-            # 使用faster-whisper
+            # 使用faster-whisper，RTX 3060 Ti优化设置
+            model_size = self.model_id.replace("faster-", "")
             self.model = WhisperModel(
-                self.model_id.replace("faster-", ""),
+                model_size,
                 device=self.device,
                 compute_type="float16" if self.device == "cuda" else "float32",
-                download_root=self.kwargs.get("download_root", "models")
+                download_root=self.kwargs.get("download_root", "models"),
+                cpu_threads=4,
+                num_workers=1,  # RTX 3060 Ti单GPU优化
             )
         else:
             # 使用原版whisper
@@ -156,65 +213,61 @@ class WhisperModelWrapper(ModelWrapper):
                 device=self.device,
                 download_root=self.kwargs.get("download_root", "models")
             )
+            
         logger.info("Whisper模型加载完成")
+        if self.device == "cuda":
+            logger.info(f"当前显存使用: {self.get_gpu_memory_usage():.1f}MB")
     
     def transcribe(self, audio_path: str, **kwargs) -> Dict[str, Any]:
         try:
-            if hasattr(self.model, 'transcribe'):
-                if "faster" in self.model_id:
-                    segments, info = self.model.transcribe(audio_path, **kwargs)
-                    return {"segments": list(segments), "language": info.language}
-                else:
-                    result = self.model.transcribe(audio_path, **kwargs)
-                    return result
-            return {"segments": [], "language": None}
+            # RTX 3060 Ti优化参数
+            if "faster" in self.model_id:
+                # Faster-Whisper设置
+                segments, info = self.model.transcribe(
+                    audio_path, 
+                    beam_size=5,  # 减少beam size以节省显存
+                    best_of=5,
+                    temperature=0.0,
+                    **kwargs
+                )
+                return {"segments": list(segments), "language": info.language}
+            else:
+                # 原版Whisper设置
+                result = self.model.transcribe(
+                    audio_path, 
+                    temperature=0.0,
+                    **kwargs
+                )
+                return result
+        except torch.cuda.OutOfMemoryError:
+            logger.warning("显存不足，尝试释放显存后重试...")
+            torch.cuda.empty_cache()
+            gc.collect()
+            # 使用更保守的设置重试
+            if "faster" in self.model_id:
+                segments, info = self.model.transcribe(
+                    audio_path, 
+                    beam_size=1,  # 最小beam size
+                    **kwargs
+                )
+                return {"segments": list(segments), "language": info.language}
+            else:
+                result = self.model.transcribe(audio_path, **kwargs)
+                return result
         except Exception as e:
             logger.error(f"Whisper转录失败: {e}")
             return {"segments": [], "language": None}
-
-class FireRedModelWrapper(ModelWrapper):
-    """FireRedASR模型包装"""
-    def load_model(self):
-        logger.info(f"加载FireRedASR模型: {self.model_id}")
-        model_type = self.model_id.split("-")[-1] if "-" in self.model_id else "aed"
-        self.model = FireRedAsr.from_pretrained(f"pengzhendong/FireRedASR-{model_type.upper()}-L")
-        if self.device == "cuda":
-            self.model = self.model.cuda()
-        logger.info("FireRedASR模型加载完成")
-    
-    def transcribe(self, audio_path: str, **kwargs) -> Dict[str, Any]:
-        try:
-            result = self.model.transcribe(audio_path)
-            # 转换为标准格式
-            duration = self.get_audio_duration(audio_path)
-            segments = [{
-                "start": 0.0,
-                "end": duration,
-                "text": result[0]["text"] if result else ""
-            }]
-            return {"segments": segments, "language": "zh"}
-        except Exception as e:
-            logger.error(f"FireRedASR转录失败: {e}")
-            return {"segments": [], "language": "zh"}
-    
-    def get_audio_duration(self, audio_path: str) -> float:
-        """获取音频时长"""
-        try:
-            import librosa
-            return librosa.get_duration(path=audio_path)
-        except:
-            return 0.0
 
 class ModelFactory:
     """模型工厂"""
     @staticmethod
     def create_model(model_id: str, device: str = "cuda", **kwargs) -> ModelWrapper:
-        if "whisper" in model_id.lower():
+        if "whisper" in model_id.lower() or model_id in ["tiny", "base", "small", "medium", "large"]:
             return WhisperModelWrapper(model_id, device, **kwargs)
         elif "firered" in model_id.lower():
-            return FireRedModelWrapper(model_id, device, **kwargs)
+            raise ValueError("FireRedASR暂时不可用，建议使用faster-base模型")
         else:
-            raise ValueError(f"不支持的模型: {model_id}")
+            raise ValueError(f"不支持的模型: {model_id}。支持的模型: tiny, base, small, medium, large, faster-base, faster-large")
 
 class VideoSubtitleExtractor:
     """视频字幕提取器"""
@@ -257,7 +310,10 @@ class VideoSubtitleExtractor:
                         "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
                         audio_path
                     ]
-                    subprocess.run(cmd, check=True, capture_output=True)
+                    result = subprocess.run(cmd, check=True, capture_output=True)
+                    if result.returncode != 0:
+                        logger.error("FFmpeg音频提取失败")
+                        return None
             
             if os.path.exists(audio_path):
                 logger.info(f"音频提取成功: {audio_path}")
@@ -279,7 +335,10 @@ class VideoSubtitleExtractor:
         try:
             with Timer("音频转录"):
                 result = self.model_wrapper.transcribe(audio_path, **kwargs)
-                logger.info(f"转录完成，识别到 {len(result.get('segments', []))} 个片段")
+                segment_count = len(result.get('segments', []))
+                logger.info(f"转录完成，识别到 {segment_count} 个片段")
+                if self.device == "cuda":
+                    logger.info(f"转录后显存使用: {self.model_wrapper.get_gpu_memory_usage():.1f}MB")
                 return result
         except Exception as e:
             logger.error(f"音频转录失败: {e}")
@@ -312,7 +371,8 @@ class VideoSubtitleExtractor:
         return f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d},{milliseconds:03d}"
     
     def cleanup(self):
-        """清理临时文件"""
+        """清理临时文件和显存"""
+        # 清理临时文件
         temp_files = [f for f in os.listdir(".") if f.endswith("_audio.wav")]
         for file in temp_files:
             try:
@@ -320,14 +380,19 @@ class VideoSubtitleExtractor:
                 logger.info(f"删除临时文件: {file}")
             except Exception as e:
                 logger.warning(f"删除临时文件失败 {file}: {e}")
+        
+        # 清理GPU显存
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            gc.collect()
 
 def main():
-    parser = argparse.ArgumentParser(description="视频字幕提取工具 - 支持多模型")
+    parser = argparse.ArgumentParser(description="视频字幕提取工具 - RTX 3060 Ti优化版")
     parser.add_argument("video_path", nargs='?', default="test.mp4", help="输入视频文件路径")
     parser.add_argument("--output", "-o", default="output.srt", help="输出字幕文件路径")
-    parser.add_argument("--model", "-m", default="base",
-                        choices=["tiny", "base", "small", "medium", "large", "faster-base", "faster-large", "firered-aed", "firered-llm"],
-                        help="模型选择")
+    parser.add_argument("--model", "-m", default="faster-base",
+                        choices=["tiny", "base", "small", "medium", "large", "faster-base", "faster-large"],
+                        help="模型选择 (推荐RTX 3060 Ti使用faster-base)")
     parser.add_argument("--device", "-d", default="cuda", choices=["cuda", "cpu"], help="运行设备")
     parser.add_argument("--language", "-l", default="zh", help="语言设置")
     parser.add_argument("--keep-temp", action="store_true", help="保留临时文件")
@@ -341,12 +406,15 @@ def main():
     
     # 检查依赖
     if not SystemChecker.check_dependencies():
-        logger.error("请先安装缺少的依赖")
+        logger.error("请先运行install_dependencies.bat安装缺少的依赖")
         return
     
     logger.info(f"开始处理视频: {args.video_path}")
     logger.info(f"使用模型: {args.model}")
     logger.info(f"运行设备: {args.device}")
+    
+    if args.model in ["medium", "large"] and args.device == "cuda":
+        logger.warning("RTX 3060 Ti显存可能不足以运行medium/large模型，建议使用faster-base")
     
     try:
         # 创建提取器
@@ -366,7 +434,7 @@ def main():
         result = extractor.transcribe_audio(
             audio_path,
             language=args.language,
-            temperature=0.2
+            temperature=0.0
         )
         
         if not result["segments"]:
@@ -377,6 +445,7 @@ def main():
         srt_path = extractor.create_srt_file(result["segments"], args.output)
         if srt_path:
             logger.info(f"字幕提取完成！文件保存至: {srt_path}")
+            logger.info(f"共识别到 {len(result['segments'])} 个字幕片段")
         else:
             logger.error("字幕文件创建失败")
     
@@ -385,7 +454,7 @@ def main():
         traceback.print_exc()
     
     finally:
-        # 清理临时文件
+        # 清理临时文件和显存
         if not args.keep_temp:
             extractor.cleanup()
 
