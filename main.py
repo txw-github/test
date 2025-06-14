@@ -1,4 +1,3 @@
-
 import os
 import sys
 import time
@@ -67,12 +66,28 @@ except ImportError:
     MOVIEPY_AVAILABLE = False
     logger.warning("MoviePy未安装，将使用FFmpeg处理音频")
 
+# 新增FireRedASR导入
+try:
+    from funasr import FireRedAsr
+    FIREREDASR_AVAILABLE = True
+    logger.info("FireRedASR库导入成功")
+except ImportError:
+    try:
+        # 尝试其他可能的导入方式
+        from fireredasr import FireRedAsr
+        FIREREDASR_AVAILABLE = True
+        logger.info("FireRedASR库导入成功")
+    except ImportError:
+        FIREREDASR_AVAILABLE = False
+        FireRedAsr = None
+        logger.warning("未找到FireRedASR库，请确保已安装: pip install funasr 或 pip install fireredasr")
+
 class Config:
     """配置管理类"""
     def __init__(self):
         self.config_file = "config.json"
         self.load_config()
-    
+
     def load_config(self):
         """加载配置文件"""
         default_config = {
@@ -86,7 +101,7 @@ class Config:
             "use_tensorrt": True,
             "audio_sample_rate": 16000
         }
-        
+
         if os.path.exists(self.config_file):
             try:
                 with open(self.config_file, 'r', encoding='utf-8') as f:
@@ -102,7 +117,7 @@ class Config:
         else:
             self.config = default_config
             self.save_config()
-    
+
     def save_config(self):
         """保存配置文件"""
         try:
@@ -110,10 +125,10 @@ class Config:
                 json.dump(self.config, f, indent=2, ensure_ascii=False)
         except Exception as e:
             logger.error(f"配置文件保存失败: {e}")
-    
+
     def get(self, key, default=None):
         return self.config.get(key, default)
-    
+
     def set(self, key, value):
         self.config[key] = value
         self.save_config()
@@ -140,13 +155,13 @@ class ProgressTracker:
         self.current_step = 0
         self.description = description
         self.pbar = tqdm(total=total_steps, desc=description, unit="step")
-    
+
     def update(self, steps=1, description=None):
         if description:
             self.pbar.set_description(description)
         self.pbar.update(steps)
         self.current_step += steps
-    
+
     def set_progress(self, current, total=None, description=None):
         if total:
             self.pbar.total = total
@@ -154,7 +169,7 @@ class ProgressTracker:
             self.pbar.set_description(description)
         self.pbar.n = current
         self.pbar.refresh()
-    
+
     def close(self):
         self.pbar.close()
 
@@ -258,13 +273,13 @@ class WhisperModelWrapper(ModelWrapper):
         """加载模型"""
         try:
             self.progress_tracker = ProgressTracker(100, f"加载{self.model_id}模型")
-            
+
             if self.device == "cuda" and torch.cuda.is_available():
                 RTX3060TiOptimizer.setup_gpu_memory(self.config.get('gpu_memory_fraction', 0.85))
 
             models_path = self.config.get('models_path', './models')
             os.makedirs(models_path, exist_ok=True)
-            
+
             self.progress_tracker.update(20, "下载模型文件...")
 
             if self.model_id in ["faster-base", "faster-large"]:
@@ -306,7 +321,7 @@ class WhisperModelWrapper(ModelWrapper):
         """转录音频"""
         try:
             progress = ProgressTracker(100, "音频转录中")
-            
+
             if self.model_id in ["faster-base", "faster-large"]:
                 progress.update(10, "开始Faster-Whisper转录...")
                 segments, info = self.model.transcribe(
@@ -371,7 +386,7 @@ class VideoSubtitleExtractor:
 
         # 初始化模型
         self.model_wrapper = self._create_model(model_id)
-        
+
     def _create_model(self, model_id: str):
         """创建模型实例"""
         if model_id in ["tiny", "base", "small", "medium", "large", "faster-base", "faster-large"]:
@@ -393,10 +408,10 @@ class VideoSubtitleExtractor:
 
         try:
             progress = ProgressTracker(100, "提取音频")
-            
+
             with Timer("音频提取"):
                 progress.update(10, "检查视频文件...")
-                
+
                 if MOVIEPY_AVAILABLE:
                     progress.update(20, "使用MoviePy提取音频...")
                     video = VideoFileClip(video_path)
@@ -447,18 +462,18 @@ class VideoSubtitleExtractor:
             # 加载模型
             if self.model_wrapper.model is None:
                 self.model_wrapper.load_model()
-            
+
             with Timer("音频转录"):
                 result = self.model_wrapper.transcribe(audio_path, **kwargs)
                 segment_count = len(result.get('segments', []))
                 logger.info(f"✅ 转录完成，识别到 {segment_count} 个片段")
-                
+
                 if self.device == "cuda":
                     memory_usage = self.model_wrapper.get_gpu_memory_usage()
                     logger.info(f"📊 转录后显存使用: {memory_usage:.1f}MB")
-                
+
                 return result
-                
+
         except Exception as e:
             logger.error(f"❌ 音频转录失败: {e}")
             return {"segments": [], "language": None}
@@ -467,10 +482,10 @@ class VideoSubtitleExtractor:
         """创建SRT字幕文件"""
         try:
             progress = ProgressTracker(len(segments) + 10, "生成字幕文件")
-            
+
             output_dir = self.config.get('output_path', './output')
             os.makedirs(output_dir, exist_ok=True)
-            
+
             if not output_path.startswith(output_dir):
                 output_path = os.path.join(output_dir, os.path.basename(output_path))
 
@@ -478,7 +493,7 @@ class VideoSubtitleExtractor:
             if enable_postprocess:
                 progress.update(5, "初始化文本后处理器...")
                 postprocessor = TextPostProcessor()
-                
+
                 # 统计原始错误
                 total_text = " ".join([seg["text"] for seg in segments])
                 original_stats = postprocessor.get_correction_stats(total_text)
@@ -491,7 +506,7 @@ class VideoSubtitleExtractor:
                     start_time = self._format_time(segment["start"])
                     end_time = self._format_time(segment["end"])
                     text = segment["text"].strip()
-                    
+
                     # 应用文本后处理
                     if enable_postprocess:
                         corrected_text = postprocessor.post_process(text)
@@ -502,7 +517,7 @@ class VideoSubtitleExtractor:
                     f.write(f"{i}\n")
                     f.write(f"{start_time} --> {end_time}\n")
                     f.write(f"{text}\n\n")
-                    
+
                     progress.update(1, f"写入片段 {i}/{len(segments)}")
 
             # 保存原始版本（可选）
@@ -522,12 +537,12 @@ class VideoSubtitleExtractor:
             progress.update(2, "完成字幕生成...")
             progress.close()
             logger.info(f"✅ SRT文件保存成功: {output_path}")
-            
+
             if enable_postprocess:
                 logger.info("🎯 文本后处理功能已启用，专业名词和多音字错误已自动修正")
-            
+
             return output_path
-            
+
         except Exception as e:
             logger.error(f"❌ SRT文件创建失败: {e}")
             return None
@@ -558,7 +573,7 @@ class VideoSubtitleExtractor:
                 torch.cuda.empty_cache()
                 gc.collect()
                 logger.info("🧹 GPU显存清理完成")
-                
+
         except Exception as e:
             logger.warning(f"⚠️ 清理过程中出现错误: {e}")
 
@@ -638,7 +653,7 @@ def main():
                 logger.info("✨ 已应用智能文本纠错")
         else:
             logger.error("❌ 字幕文件创建失败")
-        
+
         # 处理自定义词汇添加
         if args.add_term:
             from text_postprocessor import TextPostProcessor

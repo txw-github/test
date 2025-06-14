@@ -1,17 +1,19 @@
-
-# 核心依赖
 torch>=2.0.0
 torchaudio>=2.0.0
-torchvision>=2.0.0
-
-# Whisper相关
+torchvision>=0.15.0
 openai-whisper>=20231117
 faster-whisper>=0.10.0
-
-# Transformers生态
 transformers>=4.35.0
 accelerate>=0.24.0
 datasets>=2.14.0
+moviepy>=1.0.3
+tqdm>=4.66.0
+psutil>=5.9.0
+soundfile>=0.12.1
+numpy>=1.24.0
+pydub>=0.25.1
+ffmpeg-python>=0.2.0
+funasr>=1.0.0
 
 # ModelScope (FireRedASR)
 modelscope>=1.9.0
