@@ -383,14 +383,19 @@ class ModelFactory:
     """模型工厂"""
     @staticmethod
     def create_model(model_id: str, device: str = "cuda", **kwargs) -> ModelWrapper:
-        if ("whisper" in model_id.lower() or 
-            model_id in ["tiny", "base", "small", "medium", "large"] or
+        # 支持的模型列表
+        whisper_models = ["tiny", "base", "small", "medium", "large", "faster-base", "faster-large"]
+        firered_models = ["firered-aed", "firered-llm"]
+        
+        if (model_id in whisper_models or 
+            "whisper" in model_id.lower() or
             model_id.startswith("faster-")):
             return WhisperModelWrapper(model_id, device, **kwargs)
-        elif "firered" in model_id.lower():
+        elif model_id in firered_models or "firered" in model_id.lower():
             return FireRedModelWrapper(model_id, device, **kwargs)
         else:
-            raise ValueError(f"不支持的模型: {model_id}。支持的模型: tiny, base, small, medium, large, faster-base, faster-large, firered-aed, firered-llm")
+            supported_models = whisper_models + firered_models
+            raise ValueError(f"不支持的模型: {model_id}。支持的模型: {', '.join(supported_models)}")
 
 class VideoSubtitleExtractor:
     """视频字幕提取器"""
@@ -579,8 +584,11 @@ def main():
 
     finally:
         # 清理临时文件和显存
-        if extractor is not None and not args.keep_temp:
-            extractor.cleanup()
+        try:
+            if extractor is not None and not args.keep_temp:
+                extractor.cleanup()
+        except Exception as e:
+            logger.warning(f"清理过程中出现错误: {e}")
 
 if __name__ == "__main__":
     main()
