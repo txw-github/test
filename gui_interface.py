@@ -90,6 +90,17 @@ class VideoToSubtitleGUI:
         language_combo['state'] = 'readonly'
         language_combo.grid(row=1, column=1, sticky=tk.W, pady=(5, 0))
         
+        # 文本后处理选项
+        self.enable_postprocess = tk.BooleanVar(value=True)
+        postprocess_check = ttk.Checkbutton(settings_frame, text="启用智能纠错", 
+                                          variable=self.enable_postprocess)
+        postprocess_check.grid(row=1, column=2, sticky=tk.W, padx=(20, 0), pady=(5, 0))
+        
+        # 后处理说明
+        postprocess_info = ttk.Label(settings_frame, text="✨ 自动修正专业名词、多音字等识别错误", 
+                                   foreground="green", font=("Arial", 8))
+        postprocess_info.grid(row=2, column=2, sticky=tk.W, padx=(20, 0), pady=(2, 0))
+        
         # 模型说明
         model_info = ttk.Label(settings_frame, text="💡 RTX 3060 Ti推荐: faster-base (最佳平衡)", 
                               foreground="blue")
@@ -269,7 +280,11 @@ class VideoToSubtitleGUI:
                 return
                 
             # 创建字幕文件
-            srt_path = self.extractor.create_srt_file(result["segments"], self.output_path.get())
+            srt_path = self.extractor.create_srt_file(
+                result["segments"], 
+                self.output_path.get(),
+                enable_postprocess=self.enable_postprocess.get()
+            )
             
             if srt_path:
                 end_time = time.time()

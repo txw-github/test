@@ -17,6 +17,7 @@ import gc
 from tqdm import tqdm
 import psutil
 import json
+from text_postprocessor import TextPostProcessor
 
 # 配置日志
 logging.basicConfig(
@@ -462,10 +463,10 @@ class VideoSubtitleExtractor:
             logger.error(f"❌ 音频转录失败: {e}")
             return {"segments": [], "language": None}
 
-    def create_srt_file(self, segments: List[Dict], output_path: str = "output.srt") -> str:
+    def create_srt_file(self, segments: List[Dict], output_path: str = "output.srt", enable_postprocess: bool = True) -> str:
         """创建SRT字幕文件"""
         try:
-            progress = ProgressTracker(len(segments), "生成字幕文件")
+            progress = ProgressTracker(len(segments) + 10, "生成字幕文件")
             
             output_dir = self.config.get('output_path', './output')
             os.makedirs(output_dir, exist_ok=True)
@@ -473,11 +474,30 @@ class VideoSubtitleExtractor:
             if not output_path.startswith(output_dir):
                 output_path = os.path.join(output_dir, os.path.basename(output_path))
 
+            # 初始化文本后处理器
+            if enable_postprocess:
+                progress.update(5, "初始化文本后处理器...")
+                postprocessor = TextPostProcessor()
+                
+                # 统计原始错误
+                total_text = " ".join([seg["text"] for seg in segments])
+                original_stats = postprocessor.get_correction_stats(total_text)
+                logger.info(f"🔍 检测到潜在错误: 专业名词 {original_stats['professional_terms']} 处, "
+                          f"多音字 {original_stats['polyphone_errors']} 处, "
+                          f"数字单位 {original_stats['number_units']} 处")
+
             with open(output_path, "w", encoding="utf-8") as f:
                 for i, segment in enumerate(segments, 1):
                     start_time = self._format_time(segment["start"])
                     end_time = self._format_time(segment["end"])
                     text = segment["text"].strip()
+                    
+                    # 应用文本后处理
+                    if enable_postprocess:
+                        corrected_text = postprocessor.post_process(text)
+                        if corrected_text != text:
+                            logger.debug(f"片段 {i} 文本纠错: '{text}' -> '{corrected_text}'")
+                        text = corrected_text
 
                     f.write(f"{i}\n")
                     f.write(f"{start_time} --> {end_time}\n")
@@ -485,8 +505,27 @@ class VideoSubtitleExtractor:
                     
                     progress.update(1, f"写入片段 {i}/{len(segments)}")
 
+            # 保存原始版本（可选）
+            if enable_postprocess:
+                progress.update(3, "保存原始版本...")
+                original_path = output_path.replace(".srt", "_original.srt")
+                with open(original_path, "w", encoding="utf-8") as f:
+                    for i, segment in enumerate(segments, 1):
+                        start_time = self._format_time(segment["start"])
+                        end_time = self._format_time(segment["end"])
+                        text = segment["text"].strip()
+                        f.write(f"{i}\n")
+                        f.write(f"{start_time} --> {end_time}\n")
+                        f.write(f"{text}\n\n")
+                logger.info(f"📝 原始字幕保存至: {original_path}")
+
+            progress.update(2, "完成字幕生成...")
             progress.close()
             logger.info(f"✅ SRT文件保存成功: {output_path}")
+            
+            if enable_postprocess:
+                logger.info("🎯 文本后处理功能已启用，专业名词和多音字错误已自动修正")
+            
             return output_path
             
         except Exception as e:
@@ -534,6 +573,9 @@ def main():
     parser.add_argument("--language", "-l", default="zh", help="语言设置")
     parser.add_argument("--keep-temp", action="store_true", help="保留临时文件")
     parser.add_argument("--config", "-c", help="配置文件路径")
+    parser.add_argument("--no-postprocess", action="store_true", help="禁用文本后处理")
+    parser.add_argument("--add-term", nargs=2, metavar=('CORRECT', 'WRONG'), 
+                        help="添加自定义纠错词汇: --add-term '正确词' '错误词'")
 
     args = parser.parse_args()
 
@@ -587,12 +629,22 @@ def main():
             return
 
         # 创建字幕文件
-        srt_path = extractor.create_srt_file(result["segments"], args.output)
+        enable_postprocess = not args.no_postprocess
+        srt_path = extractor.create_srt_file(result["segments"], args.output, enable_postprocess)
         if srt_path:
             logger.info(f"🎉 字幕提取完成！文件保存至: {srt_path}")
             logger.info(f"📝 共识别到 {len(result['segments'])} 个字幕片段")
+            if enable_postprocess:
+                logger.info("✨ 已应用智能文本纠错")
         else:
             logger.error("❌ 字幕文件创建失败")
+        
+        # 处理自定义词汇添加
+        if args.add_term:
+            from text_postprocessor import TextPostProcessor
+            postprocessor = TextPostProcessor()
+            postprocessor.add_custom_term(args.add_term[0], [args.add_term[1]])
+            logger.info(f"✅ 已添加自定义纠错词汇: {args.add_term[0]} <- {args.add_term[1]}")
 
     except Exception as e:
         logger.error(f"❌ 处理过程中发生错误: {e}")
