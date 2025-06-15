@@ -22,9 +22,11 @@ from text_postprocessor import TextPostProcessor
 try:
     from tensorrt_manager import TensorRTEngineManager
     TENSORRT_MANAGER_AVAILABLE = True
-except ImportError:
+    logger.info("TensorRT Manager导入成功")
+except ImportError as e:
     TENSORRT_MANAGER_AVAILABLE = False
-    logger.warning("TensorRT Manager不可用")
+    logger.warning(f"TensorRT Manager不可用: {e}")
+    logger.info("将使用标准模式运行")
 
 # 配置日志 - 修复Windows编码问题
 import locale
@@ -746,10 +748,18 @@ class FunASRModelWrapper(ModelWrapper):
 
             # 检查是否可以创建TensorRT引擎
             if not hasattr(self, 'use_tensorrt') and TENSORRT_AVAILABLE and device == "cuda":
-                self._try_create_tensorrt_engine(actual_model, engine_path)
-            elif not TENSORRT_AVAILABLE and device == "cuda":
+                try:
+                    self._try_create_tensorrt_engine(actual_model, engine_path)
+                except Exception as e:
+                    logger.warning(f"TensorRT引擎创建失败: {e}")
+                    # 创建后备配置
+                    TensorRTOptimizer.create_fallback_engine(engine_path, {"model": actual_model})
+            elif device == "cuda":
                 # 没有TensorRT时创建后备配置
-                TensorRTOptimizer.create_fallback_engine(engine_path, {"model": actual_model})
+                try:
+                    TensorRTOptimizer.create_fallback_engine(engine_path, {"model": actual_model})
+                except Exception as e:
+                    logger.warning(f"后备配置创建失败: {e}")
 
             logger.info(f"[OK] FunASR模型 {self.model_id} 加载成功，运行设备: {self.device}")
             if hasattr(self, 'use_tensorrt') and self.use_tensorrt:
@@ -1299,11 +1309,20 @@ def main():
     try:
         # 首次运行自动优化TensorRT引擎
         if TENSORRT_MANAGER_AVAILABLE and args.device == "cuda":
-            engine_manager = TensorRTEngineManager(config.get('models_path', './models'))
-            model_name = args.model
-            if model_name in ["funasr-paraformer", "funasr-conformer"]:
-                model_name = "damo/speech_paraformer_asr-zh-cn-16k-common-vocab8404-onnx" # 使用ONNX模型名
-            engine_manager.auto_optimize(model_name)
+            try:
+                engine_manager = TensorRTEngineManager(config)
+                model_name = args.model
+                if model_name in ["funasr-paraformer", "funasr-conformer"]:
+                    model_name = "damo/speech_paraformer_asr-zh-cn-16k-common-vocab8404-onnx"
+                # 检查是否需要优化
+                if not engine_manager.get_engine_info(model_name.replace("/", "_")):
+                    logger.info(f"为模型 {model_name} 准备TensorRT优化...")
+                    engine_manager.optimize_for_rtx3060ti(model_name)
+                else:
+                    logger.info("TensorRT引擎已存在，跳过优化")
+            except Exception as e:
+                logger.warning(f"TensorRT优化失败: {e}")
+                logger.info("将使用标准模式运行")
 
         # 创建提取器
         extractor = VideoSubtitleExtractor(

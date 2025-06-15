@@ -75,13 +75,27 @@ class TensorRTEngineManager:
         try:
             logger.info(f"重建TensorRT引擎: {model_name}")
             
-            # 查找ONNX文件
-            onnx_path = os.path.join(self.models_path, model_name.replace("/", "_") + ".onnx")
-            engine_path = os.path.join(self.engines_path, model_name.replace("/", "_") + ".trt")
+            # 查找ONNX文件，支持多种可能的位置
+            possible_onnx_paths = [
+                os.path.join(self.models_path, model_name.replace("/", "_") + ".onnx"),
+                os.path.join(self.models_path, model_name + ".onnx"),
+                os.path.join(self.models_path, "hub", model_name.replace("/", "_") + ".onnx"),
+                os.path.join(self.models_path, "hub", model_name, "model.onnx")
+            ]
             
-            if not os.path.exists(onnx_path):
-                logger.error(f"ONNX文件不存在: {onnx_path}")
-                return False
+            onnx_path = None
+            for path in possible_onnx_paths:
+                if os.path.exists(path):
+                    onnx_path = path
+                    break
+            
+            if not onnx_path:
+                logger.warning(f"未找到ONNX文件，尝试的路径: {possible_onnx_paths}")
+                logger.info("将创建后备引擎配置文件...")
+                engine_path = os.path.join(self.engines_path, model_name.replace("/", "_") + ".trt")
+                return TensorRTOptimizer.create_fallback_engine(engine_path, {"model": model_name})
+            
+            engine_path = os.path.join(self.engines_path, model_name.replace("/", "_") + ".trt")
             
             # 删除旧引擎
             if os.path.exists(engine_path):
@@ -146,6 +160,23 @@ class TensorRTEngineManager:
             
         except Exception as e:
             logger.error(f"RTX 3060 Ti优化失败: {e}")
+            return False
+    
+    def auto_optimize(self, model_name: str) -> bool:
+        """自动优化模型"""
+        try:
+            # 检查是否已有引擎
+            engine_info = self.get_engine_info(model_name.replace("/", "_"))
+            if engine_info and engine_info.get('valid', False):
+                logger.info(f"模型 {model_name} 已有有效的TensorRT引擎")
+                return True
+            
+            # 尝试优化
+            logger.info(f"开始为模型 {model_name} 创建TensorRT引擎...")
+            return self.optimize_for_rtx3060ti(model_name)
+            
+        except Exception as e:
+            logger.warning(f"自动优化失败: {e}")
             return False
 
 def main():
