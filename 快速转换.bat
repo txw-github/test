@@ -1,147 +1,155 @@
+
 @echo off
-chcp 65001 >nul
-title 中文电视剧音频转文字工具 - RTX 3060 Ti优化版
+chcp 65001
+title RTX 3060 Ti 视频转字幕工具
+color 0A
 
-echo ===============================================
-echo        中文电视剧音频转文字工具 v2.0
-echo        多模型支持 + TensorRT加速版本
-echo ===============================================
+echo ==========================================
+echo    RTX 3060 Ti 视频转字幕工具 - 快速转换
+echo ==========================================
 echo.
 
-:: 检查Python环境
-python --version >nul 2>&1
-if errorlevel 1 (
-    echo ❌ 错误：未检测到Python环境
-    echo 请先安装Python 3.8以上版本
-    echo 下载地址：https://www.python.org/downloads/
-    pause
-    exit /b 1
-)
-
-:: 检查CUDA
-echo 🔍 检查CUDA环境...
-nvidia-smi >nul 2>&1
-if errorlevel 1 (
-    echo ⚠️ 警告：未检测到NVIDIA GPU或驱动
-    echo 将使用CPU模式运行
-    set DEVICE=cpu
-) else (
-    echo ✅ 检测到NVIDIA GPU
-    set DEVICE=cuda
-)
-
-:: 列出支持的模型
+:MENU
+echo 请选择操作：
+echo 1. 转换视频文件
+echo 2. 批量转换
+echo 3. 查看系统信息
+echo 4. 测试环境
+echo 5. 退出
 echo.
-echo 📋 支持的模型列表：
-echo [Whisper系列]
-echo   1. tiny      - 最快，准确度一般 (推荐CPU)
-echo   2. base      - 平衡，推荐日常使用
-echo   3. small     - 较好平衡
-echo   4. medium    - 高准确度 (需要6GB+显存)
-echo   5. large     - 最高准确度 (需要10GB+显存)
+set /p choice=请输入选项 (1-5): 
+
+if "%choice%"=="1" goto SINGLE_CONVERT
+if "%choice%"=="2" goto BATCH_CONVERT
+if "%choice%"=="3" goto SYSTEM_INFO
+if "%choice%"=="4" goto TEST_ENV
+if "%choice%"=="5" goto EXIT
+echo 无效选项，请重新选择！
+goto MENU
+
+:SINGLE_CONVERT
 echo.
-echo [Faster-Whisper系列] (推荐)
-echo   6. faster-base   - 快速+准确，推荐RTX 3060 Ti
-echo   7. faster-large  - 高准确度，需要较多显存
+echo ==========================================
+echo              单文件转换
+echo ==========================================
 echo.
-echo [FunASR系列] (中文优化)
-echo   8. funasr-paraformer - 中文优化，推荐RTX 3060 Ti
-echo   9. funasr-conformer  - 高精度中文识别
-echo.
-echo [FireRedASR系列] (高性能中文)
-echo   10. fireredasr-small - 快速中文识别
-echo   11. fireredasr-base  - 平衡性能，推荐
-echo   12. fireredasr-large - 高精度，需要8GB+显存
-echo.
-
-:: 用户选择模型
-set /p "model_choice=请选择模型 (1-12，直接回车使用推荐): "
-
-if "%model_choice%"=="" (
-    echo 🎯 自动选择最佳模型...
-    python -c "from model_manager import get_model_manager; print(get_model_manager().get_optimal_model())" > temp_model.txt
-    set /p selected_model=<temp_model.txt
-    del temp_model.txt
-) else (
-    if "%model_choice%"=="1" set selected_model=tiny
-    if "%model_choice%"=="2" set selected_model=base
-    if "%model_choice%"=="3" set selected_model=small
-    if "%model_choice%"=="4" set selected_model=medium
-    if "%model_choice%"=="5" set selected_model=large
-    if "%model_choice%"=="6" set selected_model=faster-base
-    if "%model_choice%"=="7" set selected_model=faster-large
-    if "%model_choice%"=="8" set selected_model=funasr-paraformer
-    if "%model_choice%"=="9" set selected_model=funasr-conformer
-    if "%model_choice%"=="10" set selected_model=fireredasr-small
-    if "%model_choice%"=="11" set selected_model=fireredasr-base
-    if "%model_choice%"=="12" set selected_model=fireredasr-large
-)
-
-if "%selected_model%"=="" set selected_model=faster-base
-
-echo ✅ 已选择模型: %selected_model%
-echo.
-
-:: 输入文件选择
-echo 📁 请输入视频文件路径 (支持拖拽文件到窗口):
-set /p "video_file="
-
-:: 去除引号
-set video_file=%video_file:"=%
+set /p video_file=请输入视频文件路径（或拖拽文件到此处）: 
 
 if not exist "%video_file%" (
-    echo ❌ 错误：文件不存在 "%video_file%"
+    echo [错误] 文件不存在！
     pause
-    exit /b 1
-)
-
-echo ✅ 视频文件: %video_file%
-
-:: 输出文件设置
-for %%f in ("%video_file%") do set "output_file=%%~dpn%%f.srt"
-echo 📝 字幕文件: %output_file%
-
-:: 高级选项
-echo.
-echo ⚙️ 高级选项 (直接回车使用默认设置):
-set /p "use_tensorrt=启用TensorRT加速? (y/N): "
-set /p "precision=精度设置 (fp16/fp32/int8): "
-set /p "batch_size=批处理大小 (1-4): "
-
-if "%precision%"=="" set precision=fp16
-if "%batch_size%"=="" set batch_size=1
-
-:: 构建命令
-set cmd=python main.py "%video_file%" --model %selected_model% --device %DEVICE% --output "%output_file%" --precision %precision% --batch-size %batch_size%
-
-if /i "%use_tensorrt%"=="y" (
-    set cmd=%cmd% --tensorrt
-    echo 🚀 已启用TensorRT加速
+    goto MENU
 )
 
 echo.
-echo 🚀 开始转换...
-echo 命令: %cmd%
+echo 请选择模型：
+echo 1. faster-base (推荐 - 速度快，精度好)
+echo 2. base (标准模型)
+echo 3. small (最快速度)
+echo 4. funasr-paraformer (中文优化，需要更多内存)
+echo.
+set /p model_choice=请选择模型 (1-4): 
+
+if "%model_choice%"=="1" set model=faster-base
+if "%model_choice%"=="2" set model=base
+if "%model_choice%"=="3" set model=small
+if "%model_choice%"=="4" set model=funasr-paraformer
+
+if "%model%"=="" (
+    echo 无效选择，使用默认模型 faster-base
+    set model=faster-base
+)
+
+echo.
+echo 开始转换，使用模型: %model%
+echo 请耐心等待...
 echo.
 
-:: 执行转换
-%cmd%
+python main.py "%video_file%" --model %model% --output "%video_file%.srt"
 
-:: 检查结果
-if exist "%output_file%" (
+if %errorLevel% equ 0 (
     echo.
-    echo 🎉 转换完成！
-    echo 📝 字幕文件已保存至: %output_file%
-    echo.
-    set /p "open_file=是否打开字幕文件? (Y/n): "
-    if /i not "%open_file%"=="n" (
-        start "" "%output_file%"
-    )
+    echo ==========================================
+    echo              转换完成！
+    echo ==========================================
+    echo 字幕文件保存为: %video_file%.srt
 ) else (
     echo.
-    echo ❌ 转换失败，请检查错误信息
+    echo ==========================================
+    echo              转换失败！
+    echo ==========================================
+    echo 请检查错误信息或尝试其他模型
+)
+
+pause
+goto MENU
+
+:BATCH_CONVERT
+echo.
+echo ==========================================
+echo              批量转换
+echo ==========================================
+echo.
+set /p folder=请输入包含视频文件的文件夹路径: 
+
+if not exist "%folder%" (
+    echo [错误] 文件夹不存在！
+    pause
+    goto MENU
 )
 
 echo.
-echo 按任意键退出...
-pause >nul
+echo 正在扫描视频文件...
+for %%f in ("%folder%\*.mp4" "%folder%\*.avi" "%folder%\*.mkv" "%folder%\*.mov") do (
+    echo 发现: %%f
+    python main.py "%%f" --model faster-base --output "%%f.srt"
+    echo ----------------------------------------
+)
+
+echo 批量转换完成！
+pause
+goto MENU
+
+:SYSTEM_INFO
+echo.
+echo ==========================================
+echo              系统信息
+echo ==========================================
+echo.
+python -c "
+import torch
+import psutil
+import platform
+
+print('操作系统:', platform.system(), platform.release())
+print('Python版本:', platform.python_version())
+print('CPU:', platform.processor())
+print('内存总量: {:.1f} GB'.format(psutil.virtual_memory().total / 1024**3))
+print('可用内存: {:.1f} GB'.format(psutil.virtual_memory().available / 1024**3))
+print()
+print('CUDA可用:', torch.cuda.is_available())
+if torch.cuda.is_available():
+    print('CUDA版本:', torch.version.cuda)
+    print('GPU名称:', torch.cuda.get_device_name(0))
+    print('GPU显存: {:.1f} GB'.format(torch.cuda.get_device_properties(0).total_memory / 1024**3))
+else:
+    print('GPU: 不可用或未正确安装CUDA')
+"
+echo.
+pause
+goto MENU
+
+:TEST_ENV
+echo.
+echo ==========================================
+echo              环境测试
+echo ==========================================
+echo.
+python test_installation.py
+pause
+goto MENU
+
+:EXIT
+echo 感谢使用！
+pause
+exit

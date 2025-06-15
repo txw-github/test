@@ -16,8 +16,7 @@ import gc
 from tqdm import tqdm
 import psutil
 import json
-from text_postprocessor import AdvancedTextPostProcessor as TextPostProcessor
-from audio_preprocessor import AudioPreprocessor
+from text_postprocessor import TextPostProcessor
 
 # TensorRT管理器集成到主程序中
 TENSORRT_MANAGER_AVAILABLE = True
@@ -103,25 +102,22 @@ os.environ['CUDA_LAZY_LOADING'] = '1'
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True,garbage_collection_threshold:0.8'
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
-# 尝试导入依赖 - 增强版本检测
+# 尝试导入依赖
 try:
     import whisper
     from faster_whisper import WhisperModel
     WHISPER_AVAILABLE = True
-    logger.info("✅ Whisper库导入成功")
 except ImportError:
     WHISPER_AVAILABLE = False
-    logger.warning("⚠️ Whisper库未安装")
+    logger.warning("Whisper库未安装")
 
 try:
     from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
     HF_AVAILABLE = True
-    logger.info("✅ Transformers库导入成功")
 except ImportError:
     HF_AVAILABLE = False
-    logger.warning("⚠️ Transformers库未安装")
+    logger.warning("Transformers库未安装")
 
-# TensorRT支持 - 增强检测
 try:
     import tensorrt as trt
     import pycuda.driver as cuda
@@ -130,62 +126,27 @@ try:
     import onnxruntime as ort
     TENSORRT_AVAILABLE = True
     ONNX_AVAILABLE = True
-    
-    # 检查TensorRT版本兼容性
-    trt_version = trt.__version__
-    logger.info(f"✅ TensorRT {trt_version} 导入成功")
-    
-    # 检查CUDA版本
-    cuda.init()
-    device_count = cuda.Device.count()
-    if device_count > 0:
-        device = cuda.Device(0)
-        device_name = device.name()
-        logger.info(f"✅ 检测到CUDA设备: {device_name}")
-    
-except ImportError as e:
+except ImportError:
     TENSORRT_AVAILABLE = False
     ONNX_AVAILABLE = False
-    logger.warning(f"⚠️ TensorRT/ONNX不可用: {e}")
-    logger.info("💡 将使用PyTorch标准模式，性能可能受限")
+    logger.warning("TensorRT/ONNX不可用，将使用PyTorch加速")
 
 try:
     from moviepy.editor import VideoFileClip
     MOVIEPY_AVAILABLE = True
-    logger.info("✅ MoviePy库导入成功")
 except ImportError:
     MOVIEPY_AVAILABLE = False
-    logger.warning("⚠️ MoviePy未安装，将使用FFmpeg处理音频")
+    logger.warning("MoviePy未安装，将使用FFmpeg处理音频")
 
-# FunASR支持 - 增强版本
+# 新增FunASR导入
 try:
     from funasr import AutoModel
     FUNASR_AVAILABLE = True
-    logger.info("✅ FunASR库导入成功")
+    logger.info("FunASR库导入成功")
 except ImportError:
     FUNASR_AVAILABLE = False
     AutoModel = None
-    logger.warning("⚠️ 未找到FunASR库，请确保已安装: pip install funasr")
-
-# FireRedASR支持 - 新增
-try:
-    from fireredasr import FireRedAsr
-    FIREREDASR_AVAILABLE = True
-    logger.info("✅ FireRedASR库导入成功")
-except ImportError:
-    FIREREDASR_AVAILABLE = False
-    FireRedAsr = None
-    logger.warning("⚠️ 未找到FireRedASR库")
-
-# SenseVoice支持 - 新增
-try:
-    from sensevoice import SenseVoiceSmall
-    SENSEVOICE_AVAILABLE = True
-    logger.info("✅ SenseVoice库导入成功")
-except ImportError:
-    SENSEVOICE_AVAILABLE = False
-    SenseVoiceSmall = None
-    logger.warning("⚠️ 未找到SenseVoice库")
+    logger.warning("未找到FunASR库，请确保已安装: pip install funasr")
 
 class Config:
     """配置管理类"""
@@ -507,47 +468,10 @@ class WhisperModelWrapper(ModelWrapper):
             raise
 
 class TensorRTOptimizer:
-    """TensorRT优化器 - RTX 3060 Ti专业版"""
+    """TensorRT优化器"""
 
     @staticmethod
-    def get_optimal_config(device_name: str = None) -> Dict[str, Any]:
-        """获取设备优化配置"""
-        if not device_name and torch.cuda.is_available():
-            device_name = torch.cuda.get_device_name(0)
-        
-        # RTX 3060 Ti优化配置
-        if "3060 Ti" in str(device_name):
-            return {
-                "workspace_size": 1 << 30,  # 1GB
-                "precision": "fp16",
-                "batch_size": 1,
-                "enable_sparse_weights": True,
-                "enable_dynamic_shapes": True,
-                "optimization_level": 5
-            }
-        # RTX 4060/4070等配置
-        elif any(gpu in str(device_name) for gpu in ["4060", "4070", "3070", "3080"]):
-            return {
-                "workspace_size": 2 << 30,  # 2GB
-                "precision": "fp16",
-                "batch_size": 2,
-                "enable_sparse_weights": True,
-                "enable_dynamic_shapes": True,
-                "optimization_level": 5
-            }
-        # 通用配置
-        else:
-            return {
-                "workspace_size": 512 << 20,  # 512MB
-                "precision": "fp16",
-                "batch_size": 1,
-                "enable_sparse_weights": False,
-                "enable_dynamic_shapes": False,
-                "optimization_level": 3
-            }
-
-    @staticmethod
-    def convert_to_tensorrt(onnx_path: str, engine_path: str, precision: str = "fp16", config_override: Dict = None) -> bool:
+    def convert_to_tensorrt(onnx_path: str, engine_path: str, precision: str = "fp16") -> bool:
         """将ONNX模型转换为TensorRT引擎"""
         try:
             if not TENSORRT_AVAILABLE:
@@ -1111,155 +1035,8 @@ class FunASRModelWrapper(ModelWrapper):
             logger.error(f"[ERROR] 大文件分段处理失败: {e}")
             raise
 
-class FireRedASRModelWrapper(ModelWrapper):
-    """FireRedASR模型包装 - 高性能中文ASR"""
-    
-    def load_model(self) -> None:
-        """加载FireRedASR模型"""
-        try:
-            if not FIREREDASR_AVAILABLE:
-                raise ImportError("FireRedASR库未安装")
-            
-            self.progress_tracker = ProgressTracker(100, f"加载FireRedASR模型")
-            
-            # RTX 3060 Ti优化
-            RTX3060TiOptimizer.optimize_cuda_settings()
-            
-            self.progress_tracker.update(30, "初始化FireRedASR...")
-            
-            # 选择适合的模型配置
-            model_configs = {
-                "fireredasr-small": "small",
-                "fireredasr-base": "base", 
-                "fireredasr-large": "large"
-            }
-            
-            actual_model = model_configs.get(self.model_id, "base")
-            
-            self.model = FireRedAsr.from_pretrained(
-                model_name=actual_model,
-                device=self.device,
-                dtype=torch.float16 if self.device == "cuda" else torch.float32
-            )
-            
-            self.progress_tracker.update(70, "模型加载完成")
-            self.progress_tracker.close()
-            
-            logger.info(f"✅ FireRedASR模型 {actual_model} 加载成功")
-            
-        except Exception as e:
-            if self.progress_tracker:
-                self.progress_tracker.close()
-            logger.error(f"❌ FireRedASR模型加载失败: {e}")
-            raise
-    
-    def transcribe(self, audio_path: str, **kwargs) -> Dict[str, Any]:
-        """转录音频"""
-        try:
-            progress = ProgressTracker(100, "FireRedASR转录中")
-            
-            progress.update(10, "开始转录...")
-            
-            # FireRedASR转录
-            result = self.model.transcribe(
-                audio_path,
-                language="zh",
-                batch_size=1
-            )
-            
-            progress.update(60, "处理结果...")
-            
-            # 格式化结果
-            formatted_result = {
-                "text": "",
-                "segments": [],
-                "language": "zh"
-            }
-            
-            if result and "segments" in result:
-                for segment in result["segments"]:
-                    formatted_result["segments"].append({
-                        "start": segment.get("start", 0),
-                        "end": segment.get("end", 0),
-                        "text": segment.get("text", "").strip()
-                    })
-                    formatted_result["text"] += segment.get("text", "").strip() + " "
-            
-            progress.close()
-            return formatted_result
-            
-        except Exception as e:
-            logger.error(f"❌ FireRedASR转录失败: {e}")
-            raise
-
-class SenseVoiceModelWrapper(ModelWrapper):
-    """SenseVoice模型包装 - 阿里达摩院ASR"""
-    
-    def load_model(self) -> None:
-        """加载SenseVoice模型"""
-        try:
-            if not SENSEVOICE_AVAILABLE:
-                raise ImportError("SenseVoice库未安装")
-            
-            self.progress_tracker = ProgressTracker(100, f"加载SenseVoice模型")
-            
-            # RTX 3060 Ti优化
-            RTX3060TiOptimizer.optimize_cuda_settings()
-            
-            self.progress_tracker.update(30, "初始化SenseVoice...")
-            
-            # SenseVoice模型配置
-            self.model = SenseVoiceSmall.from_pretrained(
-                "iic/SenseVoiceSmall",
-                device=self.device
-            )
-            
-            self.progress_tracker.update(70, "模型加载完成")
-            self.progress_tracker.close()
-            
-            logger.info(f"✅ SenseVoice模型加载成功")
-            
-        except Exception as e:
-            if self.progress_tracker:
-                self.progress_tracker.close()
-            logger.error(f"❌ SenseVoice模型加载失败: {e}")
-            raise
-    
-    def transcribe(self, audio_path: str, **kwargs) -> Dict[str, Any]:
-        """转录音频"""
-        try:
-            progress = ProgressTracker(100, "SenseVoice转录中")
-            
-            progress.update(10, "开始转录...")
-            
-            # SenseVoice转录
-            result = self.model.inference(
-                audio_path,
-                language="zh"
-            )
-            
-            progress.update(60, "处理结果...")
-            
-            # 格式化结果
-            formatted_result = {
-                "text": result.get("text", ""),
-                "segments": [{
-                    "start": 0,
-                    "end": 0,  # SenseVoice需要额外处理获取时间戳
-                    "text": result.get("text", "")
-                }],
-                "language": "zh"
-            }
-            
-            progress.close()
-            return formatted_result
-            
-        except Exception as e:
-            logger.error(f"❌ SenseVoice转录失败: {e}")
-            raise
-
 class VideoSubtitleExtractor:
-    """视频字幕提取器 - 多模型支持版"""
+    """视频字幕提取器"""
     def __init__(self, model_id: str = "faster-base", device: str = "cuda", config: Config = None, **kwargs):
         self.config = config or Config()
         self.device = device
@@ -1274,31 +1051,15 @@ class VideoSubtitleExtractor:
         self.model_wrapper = self._create_model(model_id)
 
     def _create_model(self, model_id: str):
-        """创建模型实例 - 支持多种模型"""
-        # Whisper系列
+        """创建模型实例"""
         if model_id in ["tiny", "base", "small", "medium", "large", "faster-base", "faster-large"]:
             return WhisperModelWrapper(model_id, self.device, self.config, **self.kwargs)
-        
-        # FunASR系列
         elif model_id in ["funasr-paraformer", "funasr-conformer"]:
             if not FUNASR_AVAILABLE:
                 raise ValueError("FunASR库未安装，请运行: pip install funasr")
             return FunASRModelWrapper(model_id, self.device, self.config, **self.kwargs)
-        
-        # FireRedASR系列
-        elif model_id in ["fireredasr-small", "fireredasr-base", "fireredasr-large"]:
-            if not FIREREDASR_AVAILABLE:
-                raise ValueError("FireRedASR库未安装，请运行: pip install fireredasr")
-            return FireRedASRModelWrapper(model_id, self.device, self.config, **self.kwargs)
-        
-        # SenseVoice系列
-        elif model_id in ["sensevoice-small", "sensevoice-large"]:
-            if not SENSEVOICE_AVAILABLE:
-                raise ValueError("SenseVoice库未安装，请运行: pip install sensevoice")
-            return SenseVoiceModelWrapper(model_id, self.device, self.config, **self.kwargs)
-        
         else:
-            raise ValueError(f"不支持的模型: {model_id}。支持的模型: Whisper系列, FunASR系列, FireRedASR系列, SenseVoice系列")
+            raise ValueError(f"不支持的模型: {model_id}")
 
     def extract_audio(self, video_path: str, audio_path: str = None) -> Optional[str]:
         """从视频提取音频"""
@@ -1370,11 +1131,7 @@ class VideoSubtitleExtractor:
                 self.model_wrapper.load_model()
 
             with Timer("音频转录"):
-                # 音频预处理
-                audio_preprocessor = AudioPreprocessor()
-                processed_audio_path = audio_preprocessor.preprocess_audio(audio_path)
-
-                result = self.model_wrapper.transcribe(processed_audio_path, **kwargs)
+                result = self.model_wrapper.transcribe(audio_path, **kwargs)
                 segment_count = len(result.get('segments', []))
                 logger.info(f"✅ 转录完成，识别到 {segment_count} 个片段")
 
@@ -1447,11 +1204,11 @@ class VideoSubtitleExtractor:
                 # 统计处理结果
                 total_text = " ".join([seg["text"] for seg in segments])
                 processed_text = postprocessor.post_process(total_text)
-
+                
                 # 统计标点符号
                 punctuation_count = len(re.findall(r'[，。！？；：]', processed_text))
                 sentence_count = len(re.findall(r'[。！？]', processed_text))
-
+                
                 logger.info(f"📊 文本处理统计: 添加了 {punctuation_count} 个标点符号, {sentence_count} 个句子")
 
             progress.update(2, "完成字幕生成...")
@@ -1498,33 +1255,20 @@ class VideoSubtitleExtractor:
             logger.warning(f"⚠️ 清理过程中出现错误: {e}")
 
 def main():
-    parser = argparse.ArgumentParser(description="中文电视剧音频转文字工具 - RTX 3060 Ti多模型优化版")
+    parser = argparse.ArgumentParser(description="中文电视剧音频转文字工具 - RTX 3060 Ti优化版")
     parser.add_argument("video_path", nargs='?', default="test.mp4", help="输入视频文件路径")
     parser.add_argument("--output", "-o", default="output.srt", help="输出字幕文件路径")
     parser.add_argument("--model", "-m", default="faster-base",
-                        choices=[
-                            # Whisper系列
-                            "tiny", "base", "small", "medium", "large", "faster-base", "faster-large",
-                            # FunASR系列
-                            "funasr-paraformer", "funasr-conformer", 
-                            # FireRedASR系列
-                            "fireredasr-small", "fireredasr-base", "fireredasr-large",
-                            # SenseVoice系列
-                            "sensevoice-small", "sensevoice-large"
-                        ],
-                        help="模型选择 (推荐RTX 3060 Ti: faster-base, funasr-paraformer, fireredasr-base)")
+                        choices=["tiny", "base", "small", "medium", "large", "faster-base", "faster-large", 
+                                "funasr-paraformer", "funasr-conformer"],
+                        help="模型选择 (推荐RTX 3060 Ti使用faster-base或funasr-paraformer)")
     parser.add_argument("--device", "-d", default="cuda", choices=["cuda", "cpu"], help="运行设备")
     parser.add_argument("--language", "-l", default="zh", help="语言设置")
-    parser.add_argument("--precision", default="fp16", choices=["fp16", "fp32", "int8"], help="模型精度")
-    parser.add_argument("--tensorrt", action="store_true", help="启用TensorRT加速")
-    parser.add_argument("--batch-size", type=int, default=1, help="批处理大小")
     parser.add_argument("--keep-temp", action="store_true", help="保留临时文件")
     parser.add_argument("--config", "-c", help="配置文件路径")
     parser.add_argument("--no-postprocess", action="store_true", help="禁用文本后处理")
     parser.add_argument("--add-term", nargs=2, metavar=('CORRECT', 'WRONG'), 
                         help="添加自定义纠错词汇: --add-term '正确词' '错误词'")
-    parser.add_argument("--benchmark", action="store_true", help="运行性能基准测试")
-    parser.add_argument("--optimize-tensorrt", action="store_true", help="优化TensorRT引擎")
 
     args = parser.parse_args()
 
@@ -1566,13 +1310,13 @@ def main():
                 models_path = config.get('models_path', './models')
                 engine_dir = os.path.join(models_path, 'tensorrt_engines')
                 os.makedirs(engine_dir, exist_ok=True)
-
+                
                 model_name = args.model
                 if model_name in ["funasr-paraformer", "funasr-conformer"]:
                     model_name = "damo/speech_paraformer_asr-zh-cn-16k-common-vocab8404-onnx"
-
+                
                 engine_path = os.path.join(engine_dir, f"{model_name.replace('/', '_')}.trt")
-
+                
                 if not os.path.exists(engine_path):
                     logger.info(f"为模型 {model_name} 准备TensorRT优化...")
                     # 创建后备配置文件
@@ -1620,7 +1364,7 @@ def main():
 
         # 处理自定义词汇添加
         if args.add_term:
-            from text_postprocessor import AdvancedTextPostProcessor as TextPostProcessor
+            from text_postprocessor import TextPostProcessor
             postprocessor = TextPostProcessor()
             postprocessor.add_custom_term(args.add_term[0], [args.add_term[1]])
             logger.info(f"✅ 已添加自定义纠错词汇: {args.add_term[0]} <- {args.add_term[1]}")
