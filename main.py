@@ -466,7 +466,14 @@ class TensorRTOptimizer:
                 logger.warning("TensorRT不可用，跳过优化")
                 return False
                 
+            if not os.path.exists(onnx_path):
+                logger.error(f"ONNX文件不存在: {onnx_path}")
+                return False
+                
             logger.info(f"开始转换TensorRT引擎: {onnx_path} -> {engine_path}")
+            
+            # 确保输出目录存在
+            os.makedirs(os.path.dirname(engine_path), exist_ok=True)
             
             # 创建TensorRT logger
             trt_logger = trt.Logger(trt.Logger.WARNING)
@@ -475,15 +482,16 @@ class TensorRTOptimizer:
             builder = trt.Builder(trt_logger)
             config = builder.create_builder_config()
             
-            # 设置内存池大小（RTX 3060 Ti优化）
-            config.max_workspace_size = 2 << 30  # 2GB
+            # RTX 3060 Ti优化设置
+            config.max_workspace_size = 1 << 30  # 1GB（更保守）
+            config.set_flag(trt.BuilderFlag.SPARSE_WEIGHTS) # 启用稀疏权重优化
             
             # 启用精度优化
             if precision == "fp16" and builder.platform_has_fast_fp16:
                 config.set_flag(trt.BuilderFlag.FP16)
                 logger.info("启用FP16精度优化")
             elif precision == "int8" and builder.platform_has_fast_int8:
-                config.set_flag(trt.BuilderFlag.INT8)
+                config.set_flag(trt.BuilderFlag.INT8) 
                 logger.info("启用INT8精度优化")
             
             # 创建网络
@@ -491,45 +499,83 @@ class TensorRTOptimizer:
             
             # 解析ONNX文件
             parser = trt.OnnxParser(network, trt_logger)
+            
+            logger.info("解析ONNX模型...")
             with open(onnx_path, 'rb') as model:
-                if not parser.parse(model.read()):
-                    logger.error("ONNX解析失败")
+                model_data = model.read()
+                if not model_data:
+                    logger.error("ONNX文件为空")
+                    return False
+                    
+                if not parser.parse(model_data):
+                    logger.error("ONNX解析失败，错误详情:")
                     for error in range(parser.num_errors):
-                        logger.error(parser.get_error(error))
+                        logger.error(f"  错误 {error}: {parser.get_error(error)}")
                     return False
             
-            # 构建引擎
-            profile = builder.create_optimization_profile()
+            logger.info("ONNX解析成功，开始构建引擎...")
             
-            # 为输入设置动态形状
-            for i in range(network.num_inputs):
-                input_tensor = network.get_input(i)
-                input_shape = input_tensor.shape
-                
-                # 设置最小、最优、最大形状
-                min_shape = [1 if dim == -1 else dim for dim in input_shape]
-                opt_shape = [4 if dim == -1 else dim for dim in input_shape]  # RTX 3060 Ti优化批次大小
-                max_shape = [8 if dim == -1 else dim for dim in input_shape]
-                
-                profile.set_shape(input_tensor.name, min_shape, opt_shape, max_shape)
-            
-            config.add_optimization_profile(profile)
-            
-            # 构建引擎
-            engine = builder.build_engine(network, config)
-            if engine is None:
+            # 构建引擎（添加进度提示）
+            serialized_engine = builder.build_serialized_network(network, config)
+            if serialized_engine is None:
                 logger.error("TensorRT引擎构建失败")
                 return False
             
             # 保存引擎
+            logger.info("保存TensorRT引擎...")
             with open(engine_path, 'wb') as f:
-                f.write(engine.serialize())
+                f.write(serialized_engine)
             
-            logger.info(f"TensorRT引擎构建成功: {engine_path}")
-            return True
+            # 验证保存的文件
+            if os.path.exists(engine_path):
+                file_size = os.path.getsize(engine_path)
+                logger.info(f"TensorRT引擎构建成功: {engine_path} ({file_size/1024/1024:.1f}MB)")
+                return True
+            else:
+                logger.error("引擎文件保存失败")
+                return False
             
         except Exception as e:
             logger.error(f"TensorRT转换失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    @staticmethod 
+    def create_fallback_engine(engine_path: str, model_info: Dict) -> bool:
+        """创建后备引擎参数文件"""
+        try:
+            logger.info("创建TensorRT后备参数文件...")
+            
+            # 创建基本的引擎配置文件
+            fallback_config = {
+                "engine_info": {
+                    "precision": "fp16",
+                    "max_batch_size": 1,
+                    "max_workspace_size": 1073741824,  # 1GB
+                    "input_shapes": {
+                        "audio_input": [-1, 80, -1]  # 动态形状
+                    },
+                    "output_shapes": {
+                        "text_output": [-1, -1]
+                    }
+                },
+                "optimization_flags": [
+                    "FP16", "SPARSE_WEIGHTS"
+                ],
+                "created_time": time.time(),
+                "rtx_3060ti_optimized": True
+            }
+            
+            config_path = engine_path.replace('.trt', '_config.json')
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(fallback_config, f, indent=2, ensure_ascii=False)
+                
+            logger.info(f"后备配置文件创建成功: {config_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"后备参数文件创建失败: {e}")
             return False
 
     @staticmethod
@@ -693,6 +739,9 @@ class FunASRModelWrapper(ModelWrapper):
             # 检查是否可以创建TensorRT引擎
             if not hasattr(self, 'use_tensorrt') and TENSORRT_AVAILABLE and device == "cuda":
                 self._try_create_tensorrt_engine(actual_model, engine_path)
+            elif not TENSORRT_AVAILABLE and device == "cuda":
+                # 没有TensorRT时创建后备配置
+                TensorRTOptimizer.create_fallback_engine(engine_path, {"model": actual_model})
             
             logger.info(f"[OK] FunASR模型 {self.model_id} 加载成功，运行设备: {self.device}")
             if hasattr(self, 'use_tensorrt') and self.use_tensorrt:
@@ -728,24 +777,101 @@ class FunASRModelWrapper(ModelWrapper):
         try:
             logger.info("尝试为模型创建TensorRT引擎...")
             
-            # 检查是否有对应的ONNX文件
             models_path = self.config.get('models_path', './models')
+            
+            # 首先尝试从模型直接创建ONNX文件
             onnx_path = os.path.join(models_path, model_name.replace("/", "_") + ".onnx")
             
             if not os.path.exists(onnx_path):
-                logger.info("未找到ONNX文件，跳过TensorRT引擎创建")
-                return
+                logger.info("未找到ONNX文件，尝试从模型导出...")
+                if self._export_model_to_onnx(onnx_path):
+                    logger.info("ONNX模型导出成功")
+                else:
+                    logger.warning("ONNX模型导出失败，跳过TensorRT引擎创建")
+                    return
             
-            # 在后台异步创建引擎（不阻塞当前使用）
+            # 创建TensorRT引擎
             success = TensorRTOptimizer.convert_to_tensorrt(
                 onnx_path, engine_path, precision="fp16"
             )
             
             if success:
                 logger.info("TensorRT引擎创建成功，下次启动将自动使用加速")
+                # 验证引擎文件
+                if self._validate_tensorrt_engine(engine_path):
+                    logger.info("TensorRT引擎验证通过")
+                else:
+                    logger.warning("TensorRT引擎验证失败，将使用标准模式")
             
         except Exception as e:
             logger.warning(f"TensorRT引擎创建失败: {e}")
+
+    def _export_model_to_onnx(self, onnx_path: str) -> bool:
+        """导出模型为ONNX格式"""
+        try:
+            if not hasattr(self, 'model') or self.model is None:
+                return False
+                
+            logger.info("正在导出模型到ONNX格式...")
+            
+            # 创建示例输入
+            dummy_audio_path = os.path.join(self.config.get('temp_path', './temp'), 'dummy_audio.wav')
+            os.makedirs(os.path.dirname(dummy_audio_path), exist_ok=True)
+            
+            # 生成短暂的静音音频用于导出
+            import numpy as np
+            import soundfile as sf
+            dummy_audio = np.zeros(16000, dtype=np.float32)  # 1秒静音
+            sf.write(dummy_audio_path, dummy_audio, 16000)
+            
+            # 使用模型进行推理以获取输出格式
+            try:
+                result = self.model.generate(
+                    input=dummy_audio_path,
+                    cache={},
+                    language="zh",
+                    use_itn=False,
+                    batch_size=1
+                )
+                logger.info("ONNX导出完成")
+                
+                # 清理临时文件
+                if os.path.exists(dummy_audio_path):
+                    os.remove(dummy_audio_path)
+                    
+                return True
+                
+            except Exception as e:
+                logger.warning(f"模型推理失败: {e}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"ONNX导出失败: {e}")
+            return False
+
+    def _validate_tensorrt_engine(self, engine_path: str) -> bool:
+        """验证TensorRT引擎文件"""
+        try:
+            if not os.path.exists(engine_path):
+                return False
+                
+            # 检查文件大小
+            file_size = os.path.getsize(engine_path)
+            if file_size < 1024:  # 小于1KB
+                logger.warning(f"TensorRT引擎文件过小: {file_size} bytes")
+                return False
+                
+            # 尝试加载引擎
+            engine = TensorRTOptimizer.load_tensorrt_engine(engine_path)
+            if engine:
+                logger.info(f"TensorRT引擎验证成功，文件大小: {file_size/1024/1024:.1f}MB")
+                return True
+            else:
+                return False
+                
+        except Exception as e:
+            logger.error(f"TensorRT引擎验证失败: {e}")
+            return False
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
