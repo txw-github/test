@@ -515,3 +515,33 @@ class TextPostProcessor:
         text = self._process_punctuation(text)
 
         return text.strip()
+
+    def get_correction_stats(self, text: str) -> Dict[str, int]:
+        """获取纠错统计信息"""
+        stats = {
+            "professional_terms": 0,
+            "polyphone_errors": 0,
+            "number_units": 0,
+            "total_chars": len(text)
+        }
+
+        # 统计专业名词错误
+        professional_terms = self.config.get("professional_terms", {})
+        for correct_term, wrong_terms in professional_terms.items():
+            for wrong_term in wrong_terms:
+                stats["professional_terms"] += text.count(wrong_term)
+
+        # 统计多音字错误
+        polyphone_corrections = self.config.get("polyphone_corrections", {})
+        for correct_word, info in polyphone_corrections.items():
+            wrong_words = info.get("incorrect", [])
+            for wrong_word in wrong_words:
+                stats["polyphone_errors"] += text.count(wrong_word)
+
+        # 统计数字单位错误
+        number_unit_corrections = self.config.get("number_unit_corrections", {})
+        for correct, wrong_list in number_unit_corrections.items():
+            for wrong in wrong_list:
+                stats["number_units"] += text.count(wrong)
+
+        return stats
