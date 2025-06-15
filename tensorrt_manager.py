@@ -199,13 +199,27 @@ class TensorRTOptimizer:
             return None
 
 class TensorRTEngineManager:
-    """TensorRT引擎管理器"""
+    """TensorRT引擎管理器 - 增强版"""
     
     def __init__(self, config: Config = None):
         self.config = config or Config()
         self.models_path = self.config.get('models_path', './models')
         self.engines_path = os.path.join(self.models_path, 'tensorrt_engines')
+        self.onnx_path = os.path.join(self.models_path, 'onnx_models')
         os.makedirs(self.engines_path, exist_ok=True)
+        os.makedirs(self.onnx_path, exist_ok=True)
+        
+        # 支持的模型列表
+        self.supported_models = {
+            "whisper": ["tiny", "base", "small", "medium", "large"],
+            "faster-whisper": ["faster-base", "faster-large"],
+            "funasr": ["funasr-paraformer", "funasr-conformer"],
+            "fireredasr": ["fireredasr-small", "fireredasr-base", "fireredasr-large"],
+            "sensevoice": ["sensevoice-small", "sensevoice-large"]
+        }
+        
+        # 设备优化配置
+        self.device_configs = self._get_device_configs()
         
     def list_available_engines(self) -> List[Dict]:
         """列出可用的TensorRT引擎"""
