@@ -213,39 +213,124 @@ class ModelManager:
         except Exception as e:
             logger.error(f"配置保存失败: {e}")
     
-    def get_optimal_model(self, task: str = "transcription", language: str = "zh") -> str:
-        """获取最佳模型"""
+    def get_optimal_model(self, task: str = "transcription", language: str = "zh", precision: str = "balanced") -> str:
+        """获取最佳模型 - 增强版"""
         try:
             import torch
             if not torch.cuda.is_available():
+                logger.warning("CUDA不可用，使用CPU模式")
                 return "tiny"  # CPU模式使用最小模型
             
             gpu_name = torch.cuda.get_device_name(0)
             vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            available_memory = torch.cuda.memory_reserved(0) / (1024**3)  # 已分配内存
+            free_memory = vram_gb - available_memory
             
-            logger.info(f"🎯 检测到GPU: {gpu_name} ({vram_gb:.1f}GB)")
+            logger.info(f"🎯 GPU信息: {gpu_name} ({vram_gb:.1f}GB总计, {free_memory:.1f}GB可用)")
             
-            # 根据GPU选择首选模型
-            for gpu_key, models in self.config["preferred_models"].items():
+            # 根据精度调整内存要求
+            memory_multiplier = {
+                "fast": 0.7,     # 快速模式内存占用更少
+                "balanced": 0.8,  # 平衡模式
+                "high": 0.9      # 高精度模式内存占用更多
+            }.get(precision, 0.8)
+            
+            # 检查系统负载
+            import psutil
+            cpu_percent = psutil.cpu_percent(interval=1)
+            memory_percent = psutil.virtual_memory().percent
+            
+            if cpu_percent > 80 or memory_percent > 85:
+                logger.warning(f"系统负载较高 (CPU: {cpu_percent}%, 内存: {memory_percent}%)，选择轻量模型")
+                memory_multiplier *= 0.8
+            
+            # 特殊GPU优化
+            gpu_optimizations = {
+                "RTX 3060 Ti": {
+                    "models": ["faster-base", "funasr-paraformer", "whisper-base"],
+                    "memory_limit": 5.5,  # 为系统预留0.5GB
+                    "tensorrt_support": True
+                },
+                "RTX 3060": {
+                    "models": ["faster-base", "whisper-small"],
+                    "memory_limit": 5.0,
+                    "tensorrt_support": True
+                },
+                "RTX 3070": {
+                    "models": ["faster-large", "whisper-medium", "funasr-conformer"],
+                    "memory_limit": 7.0,
+                    "tensorrt_support": True
+                },
+                "RTX 4060": {
+                    "models": ["whisper-medium", "funasr-conformer"],
+                    "memory_limit": 7.5,
+                    "tensorrt_support": True
+                },
+                "RTX 4060 Ti": {
+                    "models": ["whisper-medium", "faster-large"],
+                    "memory_limit": 15.0,
+                    "tensorrt_support": True
+                }
+            }
+            
+            # 根据GPU选择最优配置
+            selected_config = None
+            for gpu_key, config in gpu_optimizations.items():
                 if gpu_key in gpu_name:
-                    for model in models:
-                        model_info = self.registry.get_model_info(model)
-                        if model_info and model_info.min_vram_gb <= vram_gb * 0.8:  # 留20%余量
-                            logger.info(f"✅ 推荐模型: {model}")
-                            return model
+                    selected_config = config
+                    break
+            
+            if selected_config:
+                available_models = selected_config["models"]
+                memory_limit = min(free_memory * memory_multiplier, selected_config["memory_limit"])
+                
+                # 根据任务类型和语言优化
+                if language == "zh":
+                    # 中文优先选择
+                    if "funasr-paraformer" in available_models and memory_limit >= 3.0:
+                        logger.info("✅ 选择中文优化模型: funasr-paraformer")
+                        return "funasr-paraformer"
+                    elif "faster-base" in available_models and memory_limit >= 2.0:
+                        logger.info("✅ 选择快速模型: faster-base")
+                        return "faster-base"
+                
+                # 通用选择逻辑
+                for model in available_models:
+                    model_info = self.registry.get_model_info(model)
+                    if model_info and model_info.min_vram_gb <= memory_limit:
+                        logger.info(f"✅ 推荐模型: {model} (显存需求: {model_info.min_vram_gb}GB)")
+                        return model
             
             # 降级选择
-            recommended = self.registry.get_recommended_models(gpu_name, vram_gb * 0.8)
+            logger.info("执行降级模型选择...")
+            recommended = self.registry.get_recommended_models(gpu_name, free_memory * memory_multiplier)
             if recommended:
+                # 按照精度要求和显存使用量排序
+                if precision == "high":
+                    recommended.sort(key=lambda x: -x.min_vram_gb)  # 高精度选择更大模型
+                else:
+                    recommended.sort(key=lambda x: x.min_vram_gb)   # 其他情况选择更小模型
+                
                 best_model = recommended[0].name
-                logger.info(f"💡 自动选择模型: {best_model}")
+                logger.info(f"💡 降级选择模型: {best_model}")
                 return best_model
             
-            return "tiny"  # 兜底选择
+            # 最终兜底
+            fallback_models = ["faster-base", "base", "small", "tiny"]
+            for model in fallback_models:
+                model_info = self.registry.get_model_info(model)
+                if model_info and model_info.min_vram_gb <= free_memory * 0.6:
+                    logger.info(f"🔄 兜底选择: {model}")
+                    return model
+            
+            logger.warning("⚠️ 显存严重不足，强制使用tiny模型")
+            return "tiny"
             
         except Exception as e:
-            logger.warning(f"模型选择失败: {e}")
-            return self.config["default_model"]
+            logger.error(f"模型选择失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return self.config.get("default_model", "faster-base")
     
     def list_available_models(self) -> List[Dict]:
         """列出可用模型"""
