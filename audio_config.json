@@ -1,0 +1,61 @@
+
+{
+  "noise_reduction": {
+    "enable": true,
+    "strength": 0.6,
+    "method": "spectral_gating",
+    "algorithms": ["afftdn", "declick", "dehiss"],
+    "adaptive": true
+  },
+  "voice_enhancement": {
+    "enable": true,
+    "vocal_isolation": true,
+    "frequency_emphasis": [300, 3400],
+    "dynamic_range_compression": true,
+    "eq_settings": {
+      "300Hz": 3,
+      "1000Hz": 2,
+      "2000Hz": 2,
+      "4000Hz": 1.5
+    }
+  },
+  "normalization": {
+    "enable": true,
+    "target_lufs": -16,
+    "peak_limit": -1.5,
+    "loudness_range": 11
+  },
+  "chinese_optimization": {
+    "enable": true,
+    "tone_preservation": true,
+    "consonant_enhancement": true,
+    "frequency_profile": "mandarin",
+    "voice_activity_detection": true
+  },
+  "quality_thresholds": {
+    "min_duration": 0.5,
+    "min_snr": 10,
+    "min_speech_ratio": 0.3,
+    "target_quality_score": 70
+  },
+  "processing_presets": {
+    "high_quality": {
+      "description": "最高质量处理，适合专业转录",
+      "noise_reduction_strength": 0.8,
+      "voice_enhancement": true,
+      "chinese_optimization": true
+    },
+    "balanced": {
+      "description": "平衡质量与速度",
+      "noise_reduction_strength": 0.6,
+      "voice_enhancement": true,
+      "chinese_optimization": true
+    },
+    "fast": {
+      "description": "快速处理，基础优化",
+      "noise_reduction_strength": 0.4,
+      "voice_enhancement": false,
+      "chinese_optimization": false
+    }
+  }
+}
