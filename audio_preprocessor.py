@@ -494,3 +494,9 @@ class AdvancedAudioPreprocessor:
 class AudioPreprocessor(AdvancedAudioPreprocessor):
     """向后兼容的音频预处理器"""
     pass
+
+
+
+    def process_audio(self, audio_path: str, output_path: Optional[str] = None) -> str:
+        """向后兼容的音频处理方法"""
+        return self.preprocess_audio(audio_path, output_path)

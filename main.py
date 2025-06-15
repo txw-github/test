@@ -2,6 +2,10 @@ import os
 import sys
 import time
 import torch
+import warnings
+
+# 过滤加密库的兼容性警告
+warnings.filterwarnings("ignore", message=".*cryptography.*", category=DeprecationWarning)
 import argparse
 import traceback
 import subprocess
@@ -1133,8 +1137,11 @@ class VideoSubtitleExtractor:
 
             with Timer("音频转录"):
                 # 使用高级音频预处理器
-                audio_preprocessor = AdvancedAudioPreprocessor(sample_rate=self.config.get('audio_sample_rate', 16000))
-                processed_audio_path = audio_preprocessor.process_audio(audio_path)
+                audio_preprocessor = AdvancedAudioPreprocessor(
+                    target_sample_rate=self.config.get('audio_sample_rate', 16000),
+                    config_path="audio_config.json"
+                )
+                processed_audio_path = audio_preprocessor.preprocess_audio(audio_path)
 
                 result = self.model_wrapper.transcribe(processed_audio_path, **kwargs)
                 segment_count = len(result.get('segments', []))
