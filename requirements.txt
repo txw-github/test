@@ -33,6 +33,7 @@ tqdm>=4.65.0
 psutil>=5.9.0
 jieba>=0.42.1
 cn2an>=0.5.23
+zhon>=1.1.5
 
 # GPU加速依赖
 onnx>=1.14.0

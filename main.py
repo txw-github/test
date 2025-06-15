@@ -1201,12 +1201,22 @@ class VideoSubtitleExtractor:
                         f.write(f"{text}\n\n")
                 logger.info(f"📝 原始字幕保存至: {original_path}")
 
+                # 统计处理结果
+                total_text = " ".join([seg["text"] for seg in segments])
+                processed_text = postprocessor.post_process(total_text)
+                
+                # 统计标点符号
+                punctuation_count = len(re.findall(r'[，。！？；：]', processed_text))
+                sentence_count = len(re.findall(r'[。！？]', processed_text))
+                
+                logger.info(f"📊 文本处理统计: 添加了 {punctuation_count} 个标点符号, {sentence_count} 个句子")
+
             progress.update(2, "完成字幕生成...")
             progress.close()
             logger.info(f"✅ SRT文件保存成功: {output_path}")
 
             if enable_postprocess:
-                logger.info("🎯 文本后处理功能已启用，专业名词和多音字错误已自动修正")
+                logger.info("🎯 文本后处理功能已启用，已添加标点符号并修正错别字")
 
             return output_path
 
