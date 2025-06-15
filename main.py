@@ -2,10 +2,6 @@ import os
 import sys
 import time
 import torch
-import warnings
-
-# 过滤加密库的兼容性警告
-warnings.filterwarnings("ignore", message=".*cryptography.*", category=DeprecationWarning)
 import argparse
 import traceback
 import subprocess
@@ -20,8 +16,7 @@ import gc
 from tqdm import tqdm
 import psutil
 import json
-from text_postprocessor import EnhancedTextPostProcessor
-from audio_preprocessor import AdvancedAudioPreprocessor
+from text_postprocessor import TextPostProcessor
 
 # TensorRT管理器集成到主程序中
 TENSORRT_MANAGER_AVAILABLE = True
@@ -842,7 +837,7 @@ class FunASRModelWrapper(ModelWrapper):
                     language="zh",
                     use_itn=False,
                     batch_size=1
-                                )
+                )
                 logger.info("ONNX导出完成")
 
                 # 清理临时文件
@@ -1136,14 +1131,7 @@ class VideoSubtitleExtractor:
                 self.model_wrapper.load_model()
 
             with Timer("音频转录"):
-                # 使用高级音频预处理器
-                audio_preprocessor = AdvancedAudioPreprocessor(
-                    target_sample_rate=self.config.get('audio_sample_rate', 16000),
-                    config_path="audio_config.json"
-                )
-                processed_audio_path = audio_preprocessor.preprocess_audio(audio_path)
-
-                result = self.model_wrapper.transcribe(processed_audio_path, **kwargs)
+                result = self.model_wrapper.transcribe(audio_path, **kwargs)
                 segment_count = len(result.get('segments', []))
                 logger.info(f"✅ 转录完成，识别到 {segment_count} 个片段")
 
@@ -1171,7 +1159,7 @@ class VideoSubtitleExtractor:
             # 初始化文本后处理器
             if enable_postprocess:
                 progress.update(5, "初始化文本后处理器...")
-                postprocessor = EnhancedTextPostProcessor()
+                postprocessor = TextPostProcessor()
 
                 # 统计原始错误
                 total_text = " ".join([seg["text"] for seg in segments])
@@ -1216,11 +1204,11 @@ class VideoSubtitleExtractor:
                 # 统计处理结果
                 total_text = " ".join([seg["text"] for seg in segments])
                 processed_text = postprocessor.post_process(total_text)
-
+                
                 # 统计标点符号
                 punctuation_count = len(re.findall(r'[，。！？；：]', processed_text))
                 sentence_count = len(re.findall(r'[。！？]', processed_text))
-
+                
                 logger.info(f"📊 文本处理统计: 添加了 {punctuation_count} 个标点符号, {sentence_count} 个句子")
 
             progress.update(2, "完成字幕生成...")
@@ -1322,13 +1310,13 @@ def main():
                 models_path = config.get('models_path', './models')
                 engine_dir = os.path.join(models_path, 'tensorrt_engines')
                 os.makedirs(engine_dir, exist_ok=True)
-
+                
                 model_name = args.model
                 if model_name in ["funasr-paraformer", "funasr-conformer"]:
                     model_name = "damo/speech_paraformer_asr-zh-cn-16k-common-vocab8404-onnx"
-
+                
                 engine_path = os.path.join(engine_dir, f"{model_name.replace('/', '_')}.trt")
-
+                
                 if not os.path.exists(engine_path):
                     logger.info(f"为模型 {model_name} 准备TensorRT优化...")
                     # 创建后备配置文件
@@ -1376,8 +1364,8 @@ def main():
 
         # 处理自定义词汇添加
         if args.add_term:
-            from text_postprocessor import EnhancedTextPostProcessor
-            postprocessor = EnhancedTextPostProcessor()
+            from text_postprocessor import TextPostProcessor
+            postprocessor = TextPostProcessor()
             postprocessor.add_custom_term(args.add_term[0], [args.add_term[1]])
             logger.info(f"✅ 已添加自定义纠错词汇: {args.add_term[0]} <- {args.add_term[1]}")
 
