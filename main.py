@@ -16,7 +16,8 @@ import gc
 from tqdm import tqdm
 import psutil
 import json
-from text_postprocessor import TextPostProcessor
+from text_postprocessor import AdvancedTextPostProcessor as TextPostProcessor
+from audio_preprocessor import AudioPreprocessor
 
 # TensorRT管理器集成到主程序中
 TENSORRT_MANAGER_AVAILABLE = True
@@ -1131,7 +1132,11 @@ class VideoSubtitleExtractor:
                 self.model_wrapper.load_model()
 
             with Timer("音频转录"):
-                result = self.model_wrapper.transcribe(audio_path, **kwargs)
+                # 音频预处理
+                audio_preprocessor = AudioPreprocessor()
+                processed_audio_path = audio_preprocessor.preprocess_audio(audio_path)
+
+                result = self.model_wrapper.transcribe(processed_audio_path, **kwargs)
                 segment_count = len(result.get('segments', []))
                 logger.info(f"✅ 转录完成，识别到 {segment_count} 个片段")
 
@@ -1204,11 +1209,11 @@ class VideoSubtitleExtractor:
                 # 统计处理结果
                 total_text = " ".join([seg["text"] for seg in segments])
                 processed_text = postprocessor.post_process(total_text)
-                
+
                 # 统计标点符号
                 punctuation_count = len(re.findall(r'[，。！？；：]', processed_text))
                 sentence_count = len(re.findall(r'[。！？]', processed_text))
-                
+
                 logger.info(f"📊 文本处理统计: 添加了 {punctuation_count} 个标点符号, {sentence_count} 个句子")
 
             progress.update(2, "完成字幕生成...")
@@ -1310,13 +1315,13 @@ def main():
                 models_path = config.get('models_path', './models')
                 engine_dir = os.path.join(models_path, 'tensorrt_engines')
                 os.makedirs(engine_dir, exist_ok=True)
-                
+
                 model_name = args.model
                 if model_name in ["funasr-paraformer", "funasr-conformer"]:
                     model_name = "damo/speech_paraformer_asr-zh-cn-16k-common-vocab8404-onnx"
-                
+
                 engine_path = os.path.join(engine_dir, f"{model_name.replace('/', '_')}.trt")
-                
+
                 if not os.path.exists(engine_path):
                     logger.info(f"为模型 {model_name} 准备TensorRT优化...")
                     # 创建后备配置文件
@@ -1364,7 +1369,7 @@ def main():
 
         # 处理自定义词汇添加
         if args.add_term:
-            from text_postprocessor import TextPostProcessor
+            from text_postprocessor import AdvancedTextPostProcessor as TextPostProcessor
             postprocessor = TextPostProcessor()
             postprocessor.add_custom_term(args.add_term[0], [args.add_term[1]])
             logger.info(f"✅ 已添加自定义纠错词汇: {args.add_term[0]} <- {args.add_term[1]}")

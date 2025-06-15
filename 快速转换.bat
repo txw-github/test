@@ -1,155 +1,183 @@
 
 @echo off
-chcp 65001
-title RTX 3060 Ti 视频转字幕工具
-color 0A
+chcp 65001 >nul
+title 中文电视剧音频转文字工具 - RTX 3060 Ti优化版
 
-echo ==========================================
-echo    RTX 3060 Ti 视频转字幕工具 - 快速转换
-echo ==========================================
+echo.
+echo ================================================
+echo    中文电视剧音频转文字工具 - 增强版
+echo ================================================
+echo.
+echo 主要功能:
+echo  ✨ 智能文本纠错 (音对字不对、同音字、形近字)
+echo  🎵 音频预处理增强 (提高识别质量)
+echo  🎯 专业名词识别 (电视剧场景优化)
+echo  📝 智能断句标点 (自动添加标点符号)
+echo  🚀 多模型支持 (Whisper、FunASR等)
+echo  💻 RTX 3060 Ti优化 (TensorRT加速)
 echo.
 
-:MENU
-echo 请选择操作：
-echo 1. 转换视频文件
-echo 2. 批量转换
-echo 3. 查看系统信息
-echo 4. 测试环境
-echo 5. 退出
+:menu
+echo 请选择功能:
+echo  1. 转换视频文件 (推荐)
+echo  2. 只提取音频
+echo  3. 系统测试
+echo  4. 查看使用说明
+echo  5. 退出
 echo.
 set /p choice=请输入选项 (1-5): 
 
-if "%choice%"=="1" goto SINGLE_CONVERT
-if "%choice%"=="2" goto BATCH_CONVERT
-if "%choice%"=="3" goto SYSTEM_INFO
-if "%choice%"=="4" goto TEST_ENV
-if "%choice%"=="5" goto EXIT
-echo 无效选项，请重新选择！
-goto MENU
+if "%choice%"=="1" goto convert_video
+if "%choice%"=="2" goto extract_audio
+if "%choice%"=="3" goto system_test
+if "%choice%"=="4" goto show_help
+if "%choice%"=="5" goto exit
+goto menu
 
-:SINGLE_CONVERT
+:convert_video
 echo.
-echo ==========================================
-echo              单文件转换
-echo ==========================================
+echo ================================================
+echo           视频转字幕 - 增强版处理
+echo ================================================
 echo.
-set /p video_file=请输入视频文件路径（或拖拽文件到此处）: 
 
-if not exist "%video_file%" (
-    echo [错误] 文件不存在！
+set /p video_path=请输入视频文件路径 (可拖拽文件): 
+if "%video_path%"=="" goto menu
+
+rem 去除引号
+set video_path=%video_path:"=%
+
+if not exist "%video_path%" (
+    echo.
+    echo ❌ 错误: 视频文件不存在!
     pause
-    goto MENU
+    goto menu
 )
 
 echo.
-echo 请选择模型：
-echo 1. faster-base (推荐 - 速度快，精度好)
-echo 2. base (标准模型)
-echo 3. small (最快速度)
-echo 4. funasr-paraformer (中文优化，需要更多内存)
+echo 选择识别模型:
+echo  1. faster-base (推荐 - 快速高质量)
+echo  2. base (标准质量)
+echo  3. small (最快速度)
+echo  4. funasr-paraformer (中文优化)
+echo  5. funasr-conformer (高精度中文)
 echo.
-set /p model_choice=请选择模型 (1-4): 
+set /p model_choice=请选择模型 (1-5): 
 
+set model=faster-base
 if "%model_choice%"=="1" set model=faster-base
 if "%model_choice%"=="2" set model=base
 if "%model_choice%"=="3" set model=small
 if "%model_choice%"=="4" set model=funasr-paraformer
-
-if "%model%"=="" (
-    echo 无效选择，使用默认模型 faster-base
-    set model=faster-base
-)
+if "%model_choice%"=="5" set model=funasr-conformer
 
 echo.
-echo 开始转换，使用模型: %model%
-echo 请耐心等待...
+echo 文本处理选项:
+echo  1. 启用全部增强 (推荐 - 智能纠错+断句+标点)
+echo  2. 仅基础处理 (保持原始识别结果)
+echo.
+set /p process_choice=请选择处理方式 (1-2): 
+
+set process_args=
+if "%process_choice%"=="2" set process_args=--no-postprocess
+
+rem 生成输出文件名
+for %%f in ("%video_path%") do set "video_name=%%~nf"
+set output_file=%video_name%_字幕.srt
+
+echo.
+echo ================================================
+echo 开始转换...
+echo ================================================
+echo.
+echo 📂 输入文件: %video_path%
+echo 🤖 识别模型: %model%
+echo 📝 输出文件: %output_file%
+echo ✨ 增强处理: %process_choice%
 echo.
 
-python main.py "%video_file%" --model %model% --output "%video_file%.srt"
+python main.py "%video_path%" --model %model% --output "%output_file%" %process_args%
 
-if %errorLevel% equ 0 (
+echo.
+if %errorlevel%==0 (
+    echo ✅ 转换完成! 字幕文件已保存为: %output_file%
     echo.
-    echo ==========================================
-    echo              转换完成！
-    echo ==========================================
-    echo 字幕文件保存为: %video_file%.srt
+    echo 📊 处理总结:
+    echo  - 音频预处理: 已增强音频质量
+    echo  - 语音识别: 使用 %model% 模型
+    echo  - 文本优化: 已应用多层次纠错算法
+    echo  - 智能断句: 已添加标点符号和句子分割
+    echo.
 ) else (
-    echo.
-    echo ==========================================
-    echo              转换失败！
-    echo ==========================================
-    echo 请检查错误信息或尝试其他模型
+    echo ❌ 转换失败! 请检查错误信息
 )
 
 pause
-goto MENU
+goto menu
 
-:BATCH_CONVERT
+:extract_audio
 echo.
-echo ==========================================
-echo              批量转换
-echo ==========================================
+echo ================================================
+echo              仅提取音频
+echo ================================================
 echo.
-set /p folder=请输入包含视频文件的文件夹路径: 
 
-if not exist "%folder%" (
-    echo [错误] 文件夹不存在！
+set /p video_path=请输入视频文件路径: 
+if "%video_path%"=="" goto menu
+
+rem 去除引号
+set video_path=%video_path:"=%
+
+if not exist "%video_path%" (
+    echo ❌ 错误: 视频文件不存在!
     pause
-    goto MENU
+    goto menu
 )
 
-echo.
-echo 正在扫描视频文件...
-for %%f in ("%folder%\*.mp4" "%folder%\*.avi" "%folder%\*.mkv" "%folder%\*.mov") do (
-    echo 发现: %%f
-    python main.py "%%f" --model faster-base --output "%%f.srt"
-    echo ----------------------------------------
-)
+for %%f in ("%video_path%") do set "video_name=%%~nf"
+set audio_file=%video_name%_音频.wav
 
-echo 批量转换完成！
-pause
-goto MENU
-
-:SYSTEM_INFO
 echo.
-echo ==========================================
-echo              系统信息
-echo ==========================================
-echo.
+echo 正在提取音频...
 python -c "
-import torch
-import psutil
-import platform
-
-print('操作系统:', platform.system(), platform.release())
-print('Python版本:', platform.python_version())
-print('CPU:', platform.processor())
-print('内存总量: {:.1f} GB'.format(psutil.virtual_memory().total / 1024**3))
-print('可用内存: {:.1f} GB'.format(psutil.virtual_memory().available / 1024**3))
-print()
-print('CUDA可用:', torch.cuda.is_available())
-if torch.cuda.is_available():
-    print('CUDA版本:', torch.version.cuda)
-    print('GPU名称:', torch.cuda.get_device_name(0))
-    print('GPU显存: {:.1f} GB'.format(torch.cuda.get_device_properties(0).total_memory / 1024**3))
+from main import VideoSubtitleExtractor, Config
+config = Config()
+extractor = VideoSubtitleExtractor(config=config)
+result = extractor.extract_audio('%video_path%', '%audio_file%')
+if result:
+    print('✅ 音频提取完成: %audio_file%')
 else:
-    print('GPU: 不可用或未正确安装CUDA')
+    print('❌ 音频提取失败')
 "
-echo.
-pause
-goto MENU
 
-:TEST_ENV
+pause
+goto menu
+
+:system_test
 echo.
-echo ==========================================
-echo              环境测试
-echo ==========================================
+echo ================================================
+echo              系统环境测试
+echo ================================================
 echo.
+
 python test_installation.py
-pause
-goto MENU
 
-:EXIT
-echo 感谢使用！
 pause
+goto menu
+
+:show_help
+echo.
+echo ================================================
+echo                使用说明
+echo ================================================
+echo.
+type 使用说明.md
+echo.
+pause
+goto menu
+
+:exit
+echo.
+echo 感谢使用! 再见~
+timeout /t 2 >nul
 exit
