@@ -18,6 +18,14 @@ import psutil
 import json
 from text_postprocessor import TextPostProcessor
 
+# 导入TensorRT管理器
+try:
+    from tensorrt_manager import TensorRTEngineManager
+    TENSORRT_MANAGER_AVAILABLE = True
+except ImportError:
+    TENSORRT_MANAGER_AVAILABLE = False
+    logger.warning("TensorRT Manager不可用")
+
 # 配置日志 - 修复Windows编码问题
 import locale
 import sys
@@ -239,10 +247,10 @@ class RTX3060TiOptimizer:
                 total_memory = torch.cuda.get_device_properties(0).total_memory
                 max_memory = int(total_memory * memory_fraction)
                 torch.cuda.set_per_process_memory_fraction(memory_fraction)
-                
+
                 # 启用内存池优化
                 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128,expandable_segments:True'
-                
+
                 logger.info(f"GPU显存优化完成，总显存: {total_memory/1024**3:.1f}GB，预留使用: {max_memory/1024**3:.1f}GB")
             except Exception as e:
                 logger.warning(f"显存优化失败: {e}")
@@ -266,13 +274,13 @@ class RTX3060TiOptimizer:
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
             torch.backends.cudnn.enabled = True
-            
+
             # 设置CUDA流优化
             torch.cuda.synchronize()
-            
+
             # 内存优化
             torch.cuda.empty_cache()
-            
+
             logger.info("CUDA优化设置完成")
 
     @staticmethod
@@ -457,7 +465,7 @@ class WhisperModelWrapper(ModelWrapper):
 
 class TensorRTOptimizer:
     """TensorRT优化器"""
-    
+
     @staticmethod
     def convert_to_tensorrt(onnx_path: str, engine_path: str, precision: str = "fp16") -> bool:
         """将ONNX模型转换为TensorRT引擎"""
@@ -465,27 +473,27 @@ class TensorRTOptimizer:
             if not TENSORRT_AVAILABLE:
                 logger.warning("TensorRT不可用，跳过优化")
                 return False
-                
+
             if not os.path.exists(onnx_path):
                 logger.error(f"ONNX文件不存在: {onnx_path}")
                 return False
-                
+
             logger.info(f"开始转换TensorRT引擎: {onnx_path} -> {engine_path}")
-            
+
             # 确保输出目录存在
             os.makedirs(os.path.dirname(engine_path), exist_ok=True)
-            
+
             # 创建TensorRT logger
             trt_logger = trt.Logger(trt.Logger.WARNING)
-            
+
             # 创建builder和network
             builder = trt.Builder(trt_logger)
             config = builder.create_builder_config()
-            
+
             # RTX 3060 Ti优化设置
             config.max_workspace_size = 1 << 30  # 1GB（更保守）
             config.set_flag(trt.BuilderFlag.SPARSE_WEIGHTS) # 启用稀疏权重优化
-            
+
             # 启用精度优化
             if precision == "fp16" and builder.platform_has_fast_fp16:
                 config.set_flag(trt.BuilderFlag.FP16)
@@ -493,39 +501,39 @@ class TensorRTOptimizer:
             elif precision == "int8" and builder.platform_has_fast_int8:
                 config.set_flag(trt.BuilderFlag.INT8) 
                 logger.info("启用INT8精度优化")
-            
+
             # 创建网络
             network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
-            
+
             # 解析ONNX文件
             parser = trt.OnnxParser(network, trt_logger)
-            
+
             logger.info("解析ONNX模型...")
             with open(onnx_path, 'rb') as model:
                 model_data = model.read()
                 if not model_data:
                     logger.error("ONNX文件为空")
                     return False
-                    
+
                 if not parser.parse(model_data):
                     logger.error("ONNX解析失败，错误详情:")
                     for error in range(parser.num_errors):
                         logger.error(f"  错误 {error}: {parser.get_error(error)}")
                     return False
-            
+
             logger.info("ONNX解析成功，开始构建引擎...")
-            
+
             # 构建引擎（添加进度提示）
             serialized_engine = builder.build_serialized_network(network, config)
             if serialized_engine is None:
                 logger.error("TensorRT引擎构建失败")
                 return False
-            
+
             # 保存引擎
             logger.info("保存TensorRT引擎...")
             with open(engine_path, 'wb') as f:
                 f.write(serialized_engine)
-            
+
             # 验证保存的文件
             if os.path.exists(engine_path):
                 file_size = os.path.getsize(engine_path)
@@ -534,7 +542,7 @@ class TensorRTOptimizer:
             else:
                 logger.error("引擎文件保存失败")
                 return False
-            
+
         except Exception as e:
             logger.error(f"TensorRT转换失败: {e}")
             import traceback
@@ -546,7 +554,7 @@ class TensorRTOptimizer:
         """创建后备引擎参数文件"""
         try:
             logger.info("创建TensorRT后备参数文件...")
-            
+
             # 创建基本的引擎配置文件
             fallback_config = {
                 "engine_info": {
@@ -566,14 +574,14 @@ class TensorRTOptimizer:
                 "created_time": time.time(),
                 "rtx_3060ti_optimized": True
             }
-            
+
             config_path = engine_path.replace('.trt', '_config.json')
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(fallback_config, f, indent=2, ensure_ascii=False)
-                
+
             logger.info(f"后备配置文件创建成功: {config_path}")
             return True
-            
+
         except Exception as e:
             logger.error(f"后备参数文件创建失败: {e}")
             return False
@@ -585,27 +593,27 @@ class TensorRTOptimizer:
             if not os.path.exists(engine_path):
                 logger.error(f"TensorRT引擎文件不存在: {engine_path}")
                 return None
-                
+
             trt_logger = trt.Logger(trt.Logger.WARNING)
             runtime = trt.Runtime(trt_logger)
-            
+
             with open(engine_path, 'rb') as f:
                 engine = runtime.deserialize_cuda_engine(f.read())
-            
+
             if engine is None:
                 logger.error("TensorRT引擎加载失败")
                 return None
-                
+
             logger.info(f"TensorRT引擎加载成功: {engine_path}")
             return engine
-            
+
         except Exception as e:
             logger.error(f"TensorRT引擎加载错误: {e}")
             return None
 
 class ONNXOptimizer:
     """ONNX运行时优化器"""
-    
+
     @staticmethod
     def create_ort_session(model_path: str, device: str = "cuda") -> Optional[object]:
         """创建优化的ONNX Runtime会话"""
@@ -613,7 +621,7 @@ class ONNXOptimizer:
             if not ONNX_AVAILABLE:
                 logger.warning("ONNX Runtime不可用")
                 return None
-                
+
             # 配置providers
             providers = []
             if device == "cuda" and "CUDAExecutionProvider" in ort.get_available_providers():
@@ -625,20 +633,20 @@ class ONNXOptimizer:
                     "do_copy_in_default_stream": True,
                 }))
             providers.append("CPUExecutionProvider")
-            
+
             # 创建会话选项
             sess_options = ort.SessionOptions()
             sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
             sess_options.execution_mode = ort.ExecutionMode.ORT_PARALLEL
             sess_options.inter_op_num_threads = 4
             sess_options.intra_op_num_threads = 4
-            
+
             # 创建会话
             session = ort.InferenceSession(model_path, sess_options, providers=providers)
-            
+
             logger.info(f"ONNX Runtime会话创建成功，使用providers: {session.get_providers()}")
             return session
-            
+
         except Exception as e:
             logger.error(f"ONNX Runtime会话创建失败: {e}")
             return None
@@ -649,10 +657,10 @@ class FunASRModelWrapper(ModelWrapper):
         """加载模型 - TensorRT优化版"""
         try:
             self.progress_tracker = ProgressTracker(100, f"加载FunASR模型")
-            
+
             # 应用RTX 3060 Ti优化
             RTX3060TiOptimizer.optimize_cuda_settings()
-            
+
             # 强制内存清理
             gc.collect()
             if torch.cuda.is_available():
@@ -669,15 +677,15 @@ class FunASRModelWrapper(ModelWrapper):
                 "funasr-paraformer": "damo/speech_paraformer_asr-zh-cn-16k-common-vocab8404-onnx",
                 "funasr-conformer": "damo/speech_conformer_asr_nat-zh-cn-16k-common-vocab8404-onnx"  # 改为ONNX版本
             }
-            
+
             actual_model = model_mapping.get(self.model_id, model_mapping["funasr-paraformer"])
-            
+
             # 检查是否可以使用TensorRT或ONNX Runtime加速
             engine_path = RTX3060TiOptimizer.get_tensorrt_engine_path(actual_model, self.config)
             onnx_session = None
-            
+
             self.progress_tracker.update(20, "尝试加载优化引擎...")
-            
+
             # 尝试加载TensorRT引擎
             if TENSORRT_AVAILABLE and os.path.exists(engine_path):
                 logger.info("发现TensorRT引擎，尝试加载...")
@@ -688,7 +696,7 @@ class FunASRModelWrapper(ModelWrapper):
                     self.progress_tracker.update(60, "TensorRT引擎就绪")
                     self.progress_tracker.close()
                     return
-            
+
             # 尝试ONNX Runtime加速
             if ONNX_AVAILABLE and actual_model.endswith("-onnx"):
                 self.progress_tracker.update(30, "尝试ONNX Runtime加速...")
@@ -706,7 +714,7 @@ class FunASRModelWrapper(ModelWrapper):
                     logger.warning(f"ONNX Runtime加速失败: {e}")
 
             self.progress_tracker.update(40, "加载标准FunASR模型...")
-            
+
             # 设备选择逻辑
             if self.device == "cuda" and torch.cuda.is_available():
                 available_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
@@ -719,7 +727,7 @@ class FunASRModelWrapper(ModelWrapper):
             else:
                 device = "cpu"
                 self.device = "cpu"
-            
+
             # 为RTX 3060 Ti优化的参数
             model_kwargs = {
                 "model": actual_model,
@@ -730,19 +738,19 @@ class FunASRModelWrapper(ModelWrapper):
                 "batch_size": 1,  # 减小批次大小
                 "device_map": "auto" if device == "cuda" else None
             }
-            
+
             self.model = AutoModel(**model_kwargs)
 
             self.progress_tracker.update(20, "模型加载完成")
             self.progress_tracker.close()
-            
+
             # 检查是否可以创建TensorRT引擎
             if not hasattr(self, 'use_tensorrt') and TENSORRT_AVAILABLE and device == "cuda":
                 self._try_create_tensorrt_engine(actual_model, engine_path)
             elif not TENSORRT_AVAILABLE and device == "cuda":
                 # 没有TensorRT时创建后备配置
                 TensorRTOptimizer.create_fallback_engine(engine_path, {"model": actual_model})
-            
+
             logger.info(f"[OK] FunASR模型 {self.model_id} 加载成功，运行设备: {self.device}")
             if hasattr(self, 'use_tensorrt') and self.use_tensorrt:
                 logger.info("[BOOST] TensorRT加速已启用")
@@ -776,12 +784,12 @@ class FunASRModelWrapper(ModelWrapper):
         """尝试创建TensorRT引擎"""
         try:
             logger.info("尝试为模型创建TensorRT引擎...")
-            
+
             models_path = self.config.get('models_path', './models')
-            
+
             # 首先尝试从模型直接创建ONNX文件
             onnx_path = os.path.join(models_path, model_name.replace("/", "_") + ".onnx")
-            
+
             if not os.path.exists(onnx_path):
                 logger.info("未找到ONNX文件，尝试从模型导出...")
                 if self._export_model_to_onnx(onnx_path):
@@ -789,12 +797,12 @@ class FunASRModelWrapper(ModelWrapper):
                 else:
                     logger.warning("ONNX模型导出失败，跳过TensorRT引擎创建")
                     return
-            
+
             # 创建TensorRT引擎
             success = TensorRTOptimizer.convert_to_tensorrt(
                 onnx_path, engine_path, precision="fp16"
             )
-            
+
             if success:
                 logger.info("TensorRT引擎创建成功，下次启动将自动使用加速")
                 # 验证引擎文件
@@ -802,7 +810,7 @@ class FunASRModelWrapper(ModelWrapper):
                     logger.info("TensorRT引擎验证通过")
                 else:
                     logger.warning("TensorRT引擎验证失败，将使用标准模式")
-            
+
         except Exception as e:
             logger.warning(f"TensorRT引擎创建失败: {e}")
 
@@ -811,19 +819,19 @@ class FunASRModelWrapper(ModelWrapper):
         try:
             if not hasattr(self, 'model') or self.model is None:
                 return False
-                
+
             logger.info("正在导出模型到ONNX格式...")
-            
+
             # 创建示例输入
             dummy_audio_path = os.path.join(self.config.get('temp_path', './temp'), 'dummy_audio.wav')
             os.makedirs(os.path.dirname(dummy_audio_path), exist_ok=True)
-            
+
             # 生成短暂的静音音频用于导出
             import numpy as np
             import soundfile as sf
             dummy_audio = np.zeros(16000, dtype=np.float32)  # 1秒静音
             sf.write(dummy_audio_path, dummy_audio, 16000)
-            
+
             # 使用模型进行推理以获取输出格式
             try:
                 result = self.model.generate(
@@ -834,17 +842,17 @@ class FunASRModelWrapper(ModelWrapper):
                     batch_size=1
                 )
                 logger.info("ONNX导出完成")
-                
+
                 # 清理临时文件
                 if os.path.exists(dummy_audio_path):
                     os.remove(dummy_audio_path)
-                    
+
                 return True
-                
+
             except Exception as e:
                 logger.warning(f"模型推理失败: {e}")
                 return False
-                
+
         except Exception as e:
             logger.error(f"ONNX导出失败: {e}")
             return False
@@ -854,13 +862,13 @@ class FunASRModelWrapper(ModelWrapper):
         try:
             if not os.path.exists(engine_path):
                 return False
-                
+
             # 检查文件大小
             file_size = os.path.getsize(engine_path)
             if file_size < 1024:  # 小于1KB
                 logger.warning(f"TensorRT引擎文件过小: {file_size} bytes")
                 return False
-                
+
             # 尝试加载引擎
             engine = TensorRTOptimizer.load_tensorrt_engine(engine_path)
             if engine:
@@ -868,7 +876,7 @@ class FunASRModelWrapper(ModelWrapper):
                 return True
             else:
                 return False
-                
+
         except Exception as e:
             logger.error(f"TensorRT引擎验证失败: {e}")
             return False
@@ -886,18 +894,18 @@ class FunASRModelWrapper(ModelWrapper):
             progress = ProgressTracker(100, "FunASR音频转录中")
 
             progress.update(10, "开始FunASR转录...")
-            
+
             # 检查音频文件大小，如果太大则分段处理
             file_size_mb = os.path.getsize(audio_path) / (1024 * 1024)
             if file_size_mb > 100:  # 大于100MB的音频文件分段处理
                 logger.info(f"音频文件较大({file_size_mb:.1f}MB)，将分段处理以节省内存")
                 return self._transcribe_large_file(audio_path, progress)
-            
+
             # 强制内存清理
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            
+
             # FunASR转录 - 使用保守的参数
             result = self.model.generate(
                 input=audio_path,
@@ -909,7 +917,7 @@ class FunASRModelWrapper(ModelWrapper):
             )
 
             progress.update(60, "处理转录结果...")
-            
+
             # 转换为标准格式
             formatted_result = {
                 "text": "",
@@ -924,25 +932,25 @@ class FunASRModelWrapper(ModelWrapper):
                         # FunASR通常返回整段文本，需要手动分段
                         start_time = i * 30.0  # 假设每段30秒
                         end_time = (i + 1) * 30.0
-                        
+
                         formatted_result["segments"].append({
                             "start": start_time,
                             "end": end_time,
                             "text": text.strip()
                         })
                         formatted_result["text"] += text.strip() + " "
-                        
+
                         # 每处理10个片段清理一次内存
                         if i % 10 == 0:
                             gc.collect()
 
             progress.close()
-            
+
             # 转录完成后清理内存
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-                
+
             return formatted_result
 
         except Exception as e:
@@ -958,37 +966,37 @@ class FunASRModelWrapper(ModelWrapper):
                 except Exception as cpu_e:
                     logger.error(f"[ERROR] CPU模式也失败: {cpu_e}")
             raise
-    
+
     def _transcribe_large_file(self, audio_path: str, progress: ProgressTracker) -> Dict[str, Any]:
         """分段处理大音频文件"""
         try:
             import librosa
-            
+
             # 加载音频并分段
             audio, sr = librosa.load(audio_path, sr=16000)
             duration = len(audio) / sr
             segment_length = 300  # 5分钟一段
-            
+
             formatted_result = {
                 "text": "",
                 "segments": [],
                 "language": "zh"
             }
-            
+
             progress.update(20, f"分段处理音频，总时长: {duration:.1f}秒")
-            
+
             for start_sec in range(0, int(duration), segment_length):
                 end_sec = min(start_sec + segment_length, duration)
-                
+
                 # 提取音频段
                 start_sample = int(start_sec * sr)
                 end_sample = int(end_sec * sr)
                 segment_audio = audio[start_sample:end_sample]
-                
+
                 # 保存临时文件
                 temp_path = f"temp_segment_{start_sec}.wav"
                 sf.write(temp_path, segment_audio, sr)
-                
+
                 try:
                     # 转录该段
                     segment_result = self.model.generate(
@@ -999,7 +1007,7 @@ class FunASRModelWrapper(ModelWrapper):
                         batch_size_s=60,
                         batch_size=1
                     )
-                    
+
                     if segment_result and len(segment_result) > 0:
                         for res in segment_result:
                             text = res.get("text", "")
@@ -1010,22 +1018,22 @@ class FunASRModelWrapper(ModelWrapper):
                                     "text": text.strip()
                                 })
                                 formatted_result["text"] += text.strip() + " "
-                    
+
                     # 清理临时文件和内存
                     os.remove(temp_path)
                     gc.collect()
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
-                        
+
                 except Exception as e:
                     logger.warning(f"段 {start_sec}-{end_sec} 处理失败: {e}")
                     if os.path.exists(temp_path):
                         os.remove(temp_path)
-                
+
                 progress.update(60 * (end_sec - start_sec) / duration, f"处理进度: {end_sec:.0f}/{duration:.0f}秒")
-            
+
             return formatted_result
-            
+
         except Exception as e:
             logger.error(f"[ERROR] 大文件分段处理失败: {e}")
             raise
@@ -1279,7 +1287,7 @@ def main():
 
     if args.model in ["medium", "large"] and args.device == "cuda":
         logger.warning("[WARNING] RTX 3060 Ti显存可能不足以运行medium/large模型，建议使用faster-base")
-    
+
     if args.model in ["funasr-paraformer", "funasr-conformer"]:
         logger.warning("[WARNING] FunASR模型内存占用较大，如遇到内存不足请考虑使用faster-base模型")
         # 检查可用内存
@@ -1289,6 +1297,14 @@ def main():
 
     extractor = None
     try:
+        # 首次运行自动优化TensorRT引擎
+        if TENSORRT_MANAGER_AVAILABLE and args.device == "cuda":
+            engine_manager = TensorRTEngineManager(config.get('models_path', './models'))
+            model_name = args.model
+            if model_name in ["funasr-paraformer", "funasr-conformer"]:
+                model_name = "damo/speech_paraformer_asr-zh-cn-16k-common-vocab8404-onnx" # 使用ONNX模型名
+            engine_manager.auto_optimize(model_name)
+
         # 创建提取器
         extractor = VideoSubtitleExtractor(
             model_id=args.model,
