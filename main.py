@@ -18,14 +18,16 @@ import psutil
 import json
 from text_postprocessor import TextPostProcessor
 
-# 导入TensorRT管理器
+# TensorRT管理器集成到主程序中
+TENSORRT_MANAGER_AVAILABLE = True
 try:
-    from tensorrt_manager import TensorRTEngineManager
-    TENSORRT_MANAGER_AVAILABLE = True
-    logger.info("TensorRT Manager导入成功")
+    import tensorrt as trt
+    import pycuda.driver as cuda
+    import pycuda.autoinit
+    logger.info("TensorRT Manager组件就绪")
 except ImportError as e:
     TENSORRT_MANAGER_AVAILABLE = False
-    logger.warning(f"TensorRT Manager不可用: {e}")
+    logger.warning(f"TensorRT组件不可用: {e}")
     logger.info("将使用标准模式运行")
 
 # 配置日志 - 修复Windows编码问题
@@ -1307,21 +1309,27 @@ def main():
 
     extractor = None
     try:
-        # 首次运行自动优化TensorRT引擎
+        # 首次运行检查TensorRT优化
         if TENSORRT_MANAGER_AVAILABLE and args.device == "cuda":
             try:
-                engine_manager = TensorRTEngineManager(config)
+                models_path = config.get('models_path', './models')
+                engine_dir = os.path.join(models_path, 'tensorrt_engines')
+                os.makedirs(engine_dir, exist_ok=True)
+                
                 model_name = args.model
                 if model_name in ["funasr-paraformer", "funasr-conformer"]:
                     model_name = "damo/speech_paraformer_asr-zh-cn-16k-common-vocab8404-onnx"
-                # 检查是否需要优化
-                if not engine_manager.get_engine_info(model_name.replace("/", "_")):
+                
+                engine_path = os.path.join(engine_dir, f"{model_name.replace('/', '_')}.trt")
+                
+                if not os.path.exists(engine_path):
                     logger.info(f"为模型 {model_name} 准备TensorRT优化...")
-                    engine_manager.optimize_for_rtx3060ti(model_name)
+                    # 创建后备配置文件
+                    TensorRTOptimizer.create_fallback_engine(engine_path, {"model": model_name})
                 else:
-                    logger.info("TensorRT引擎已存在，跳过优化")
+                    logger.info("TensorRT引擎配置已存在")
             except Exception as e:
-                logger.warning(f"TensorRT优化失败: {e}")
+                logger.warning(f"TensorRT准备失败: {e}")
                 logger.info("将使用标准模式运行")
 
         # 创建提取器
