@@ -676,10 +676,10 @@ class FunASRModelWrapper(ModelWrapper):
 
             self.progress_tracker.update(10, "检查优化模型...")
 
-            # 优先使用ONNX模型，支持TensorRT加速
+            # 使用可用的FunASR模型
             model_mapping = {
-                "funasr-paraformer": "damo/speech_paraformer_asr-zh-cn-16k-common-vocab8404-onnx",
-                "funasr-conformer": "damo/speech_conformer_asr_nat-zh-cn-16k-common-vocab8404-onnx"  # 改为ONNX版本
+                "funasr-paraformer": "damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
+                "funasr-conformer": "damo/speech_conformer_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
             }
 
             actual_model = model_mapping.get(self.model_id, model_mapping["funasr-paraformer"])
@@ -701,21 +701,8 @@ class FunASRModelWrapper(ModelWrapper):
                     self.progress_tracker.close()
                     return
 
-            # 尝试ONNX Runtime加速
-            if ONNX_AVAILABLE and actual_model.endswith("-onnx"):
-                self.progress_tracker.update(30, "尝试ONNX Runtime加速...")
-                try:
-                    # 构建ONNX模型路径
-                    onnx_model_path = os.path.join(models_path, actual_model.replace("/", "_") + ".onnx")
-                    if os.path.exists(onnx_model_path):
-                        onnx_session = ONNXOptimizer.create_ort_session(onnx_model_path, self.device)
-                        if onnx_session:
-                            self.onnx_session = onnx_session
-                            self.use_onnx = True
-                            logger.info("[OK] ONNX Runtime加速启用")
-                            self.progress_tracker.update(40, "ONNX加速就绪")
-                except Exception as e:
-                    logger.warning(f"ONNX Runtime加速失败: {e}")
+            # 跳过ONNX优化，使用标准PyTorch模型
+            self.progress_tracker.update(30, "使用PyTorch模型...")
 
             self.progress_tracker.update(40, "加载标准FunASR模型...")
 
@@ -738,9 +725,7 @@ class FunASRModelWrapper(ModelWrapper):
                 "cache_dir": models_path,
                 "device": device,
                 "disable_update": True,
-                "model_revision": "v2.0.4",
-                "batch_size": 1,  # 减小批次大小
-                "device_map": "auto" if device == "cuda" else None
+                "batch_size": 1  # 减小批次大小
             }
 
             self.model = AutoModel(**model_kwargs)
@@ -779,7 +764,7 @@ class FunASRModelWrapper(ModelWrapper):
                 self.device = "cpu"
                 try:
                     self.model = AutoModel(
-                        model="damo/speech_paraformer_asr-zh-cn-16k-common-vocab8404-onnx",
+                        model="damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
                         device="cpu",
                         cache_dir=models_path,
                         disable_update=True,
