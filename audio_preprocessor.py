@@ -175,7 +175,7 @@ class AdvancedAudioPreprocessor:
             raise
 
     def _stage2_advanced_noise_reduction(self, audio_path: str, strength: float) -> str:
-        """阶段2: 高级多层降噪"""
+        """阶段2: 高级多层降噪 - Windows兼容版"""
         temp_path = tempfile.mktemp(suffix="_stage2.wav")
         
         try:
@@ -184,109 +184,132 @@ class AdvancedAudioPreprocessor:
                 shutil.copy2(audio_path, temp_path)
                 return temp_path
             
-            # 构建多层降噪滤镜链
-            filters = []
-            
-            # 1. 高通滤波器 - 去除低频噪声
-            filters.append("highpass=f=85")
-            
-            # 2. 低通滤波器 - 去除高频噪声  
-            filters.append("lowpass=f=7500")
-            
-            # 3. 自适应降噪
-            filters.append(f"afftdn=nf=-20:nt=w:om=o:tn=1:tf=0.5")
-            
-            # 4. 去除点击声和爆音
-            filters.append("declick=t=w:l=2")
-            
-            # 5. 去除嘶嘶声
-            filters.append("dehiss=m=o")
-            
-            # 6. 动态降噪 (根据强度调整)
-            if strength > 0.6:
-                filters.append(f"anlmdn=s={strength}:p=0.002:r=0.002:m=15")
-            
-            # 7. 门限降噪
-            filters.append("agate=threshold=0.1:ratio=2:attack=10:release=100")
-            
-            filter_chain = ",".join(filters)
-            
-            cmd = [
+            # 分层处理，避免复杂滤镜链在Windows下的兼容性问题
+            # 第一层：基础滤波
+            temp1_path = tempfile.mktemp(suffix="_stage2_1.wav")
+            cmd1 = [
                 "ffmpeg", "-y", "-i", audio_path,
-                "-af", filter_chain,
+                "-af", "highpass=f=85,lowpass=f=7500",
+                "-acodec", "pcm_s16le",
+                "-loglevel", "error",
+                temp1_path
+            ]
+            
+            result1 = subprocess.run(cmd1, capture_output=True, text=True)
+            if result1.returncode != 0:
+                logger.warning(f"基础滤波失败: {result1.stderr}")
+                # 直接复制原文件
+                import shutil
+                shutil.copy2(audio_path, temp_path)
+                return temp_path
+            
+            # 第二层：自适应降噪（简化版）
+            cmd2 = [
+                "ffmpeg", "-y", "-i", temp1_path,
+                "-af", "afftdn=nf=-12",  # 使用更保守的参数
                 "-acodec", "pcm_s16le",
                 "-loglevel", "error",
                 temp_path
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                # 降噪失败时使用简化版本
-                logger.warning("高级降噪失败，使用基础降噪")
-                simple_cmd = [
-                    "ffmpeg", "-y", "-i", audio_path,
-                    "-af", "highpass=f=85,lowpass=f=7500,afftdn=nf=-15",
-                    "-acodec", "pcm_s16le",
-                    "-loglevel", "error",
-                    temp_path
-                ]
-                subprocess.run(simple_cmd, check=True, capture_output=True)
+            result2 = subprocess.run(cmd2, capture_output=True, text=True)
+            if result2.returncode != 0:
+                logger.warning("自适应降噪失败，使用基础处理结果")
+                # 使用第一层的结果
+                import shutil
+                shutil.copy2(temp1_path, temp_path)
+            
+            # 清理临时文件
+            if os.path.exists(temp1_path):
+                os.remove(temp1_path)
                 
-            logger.debug("✓ 阶段2: 高级降噪完成")
+            logger.debug("✓ 阶段2: 降噪处理完成")
             return temp_path
             
         except Exception as e:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            raise
+            # 清理所有临时文件
+            for cleanup_path in [temp_path, temp1_path if 'temp1_path' in locals() else None]:
+                if cleanup_path and os.path.exists(cleanup_path):
+                    try:
+                        os.remove(cleanup_path)
+                    except:
+                        pass
+            
+            # 降噪完全失败时，直接复制原文件
+            logger.warning(f"降噪处理失败: {e}")
+            import shutil
+            shutil.copy2(audio_path, temp_path)
+            return temp_path
 
     def _stage3_voice_enhancement(self, audio_path: str) -> str:
-        """阶段3: 语音增强"""
+        """阶段3: 语音增强 - Windows兼容版"""
         temp_path = tempfile.mktemp(suffix="_stage3.wav")
         
         try:
-            filters = []
+            # 使用更简单但兼容性更好的EQ设置
+            eq_filters = [
+                "equalizer=f=300:width_type=h:width=1000:g=2",
+                "equalizer=f=1000:width_type=h:width=800:g=1.5",
+                "equalizer=f=3000:width_type=h:width=1000:g=1"
+            ]
             
-            # 1. 语音频段增强 (中文语音优化)
-            filters.append("equalizer=f=300:width_type=h:width=1000:g=3")
-            filters.append("equalizer=f=800:width_type=h:width=800:g=2.5")
-            filters.append("equalizer=f=1600:width_type=h:width=600:g=2")
-            filters.append("equalizer=f=3200:width_type=h:width=800:g=1.5")
+            # 分步骤处理，避免复杂的滤镜链
+            temp1_path = tempfile.mktemp(suffix="_stage3_1.wav")
             
-            # 2. 中文声调保护压缩
-            filters.append("acompressor=threshold=0.4:ratio=2.5:attack=3:release=40:makeup=1")
-            
-            # 3. 辅音增强 - 提高清晰度
-            filters.append("equalizer=f=4000:width_type=h:width=2000:g=2")
-            filters.append("equalizer=f=6000:width_type=h:width=1500:g=1")
-            
-            # 4. 多频段压缩
-            filters.append("mcompand=0.005,0.1 6 -47/-40,-34/-34,-17/-33 100 | 0.003,0.05 6 -47/-40,-34/-34,-17/-33 400 | 0.000625,0.0125 6 -47/-40,-34/-34,-15/-33 1600 | 0.0001,0.025 6 -47/-40,-34/-34,-31/-31,-0/-30 6400 | 0,0.025 6 -38/-31,-28/-28,-0/-25 22000")
-            
-            filter_chain = ",".join(filters)
-            
-            cmd = [
+            # 第一步：EQ处理
+            cmd1 = [
                 "ffmpeg", "-y", "-i", audio_path,
-                "-af", filter_chain,
+                "-af", ",".join(eq_filters),
+                "-acodec", "pcm_s16le",
+                "-loglevel", "error",
+                temp1_path
+            ]
+            
+            result1 = subprocess.run(cmd1, capture_output=True, text=True)
+            if result1.returncode != 0:
+                logger.warning("EQ处理失败，跳过语音增强")
+                import shutil
+                shutil.copy2(audio_path, temp_path)
+                return temp_path
+            
+            # 第二步：简化的压缩处理
+            cmd2 = [
+                "ffmpeg", "-y", "-i", temp1_path,
+                "-af", "acompressor=threshold=0.4:ratio=2:attack=5:release=50",
                 "-acodec", "pcm_s16le",
                 "-loglevel", "error",
                 temp_path
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                raise RuntimeError(f"语音增强失败: {result.stderr}")
+            result2 = subprocess.run(cmd2, capture_output=True, text=True)
+            if result2.returncode != 0:
+                logger.warning("压缩处理失败，使用EQ处理结果")
+                import shutil
+                shutil.copy2(temp1_path, temp_path)
+            
+            # 清理临时文件
+            if os.path.exists(temp1_path):
+                os.remove(temp1_path)
                 
             logger.debug("✓ 阶段3: 语音增强完成")
             return temp_path
             
         except Exception as e:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            raise
+            # 清理临时文件
+            for cleanup_path in [temp_path, temp1_path if 'temp1_path' in locals() else None]:
+                if cleanup_path and os.path.exists(cleanup_path):
+                    try:
+                        os.remove(cleanup_path)
+                    except:
+                        pass
+            
+            logger.warning(f"语音增强失败: {e}")
+            import shutil
+            shutil.copy2(audio_path, temp_path)
+            return temp_path
 
     def _stage4_chinese_optimization(self, audio_path: str) -> str:
-        """阶段4: 中文语音专项优化"""
+        """阶段4: 中文语音专项优化 - 简化版"""
         temp_path = tempfile.mktemp(suffix="_stage4.wav")
         
         try:
@@ -295,27 +318,15 @@ class AdvancedAudioPreprocessor:
                 shutil.copy2(audio_path, temp_path)
                 return temp_path
             
-            filters = []
-            
-            # 1. 中文音调频率保护
-            filters.append("equalizer=f=200:width_type=h:width=400:g=1")  # 基频保护
-            filters.append("equalizer=f=400:width_type=h:width=600:g=2")  # 二次谐波
-            
-            # 2. 中文辅音清晰度增强
-            filters.append("equalizer=f=2500:width_type=h:width=1000:g=1.5")
-            filters.append("equalizer=f=5000:width_type=h:width=1500:g=1.2")
-            
-            # 3. 语音活动检测优化压缩
-            filters.append("acompressor=threshold=0.3:ratio=3:attack=2:release=30:knee=2")
-            
-            # 4. 中文语音特有的动态范围优化
-            filters.append("dynaudnorm=framelen=500:gausssize=31:peak=0.95:maxgain=10:targetrms=0.20")
-            
-            filter_chain = ",".join(filters)
+            # 使用更简单的中文优化，避免复杂滤镜
+            simple_filters = [
+                "equalizer=f=400:width_type=h:width=600:g=1.5",
+                "equalizer=f=2000:width_type=h:width=1000:g=1"
+            ]
             
             cmd = [
                 "ffmpeg", "-y", "-i", audio_path,
-                "-af", filter_chain,
+                "-af", ",".join(simple_filters),
                 "-acodec", "pcm_s16le",
                 "-loglevel", "error",
                 temp_path
@@ -323,7 +334,10 @@ class AdvancedAudioPreprocessor:
             
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
-                raise RuntimeError(f"中文优化失败: {result.stderr}")
+                logger.warning(f"中文优化失败: {result.stderr}")
+                # 失败时直接复制原文件
+                import shutil
+                shutil.copy2(audio_path, temp_path)
                 
             logger.debug("✓ 阶段4: 中文优化完成")
             return temp_path
@@ -331,45 +345,29 @@ class AdvancedAudioPreprocessor:
         except Exception as e:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
-            raise
+            
+            logger.warning(f"中文优化处理失败: {e}")
+            import shutil
+            shutil.copy2(audio_path, temp_path)
+            return temp_path
 
     def _stage5_advanced_postprocessing(self, audio_path: str) -> str:
-        """阶段5: 高级后处理"""
+        """阶段5: 高级后处理 - 简化版"""
         temp_path = tempfile.mktemp(suffix="_stage5.wav")
         
         try:
-            filters = []
+            # 只保留最兼容的后处理
+            cmd = [
+                "ffmpeg", "-y", "-i", audio_path,
+                "-af", "silenceremove=start_periods=1:start_silence=0.1:start_threshold=0.02",
+                "-acodec", "pcm_s16le",
+                "-loglevel", "error",
+                temp_path
+            ]
             
-            # 1. 去混响
-            if self.config["advanced_features"]["reverb_reduction"]:
-                filters.append("aderivative")
-                filters.append("aintegral")
-            
-            # 2. 背景音乐抑制
-            if self.config["advanced_features"]["background_music_suppression"]:
-                filters.append("extrastereo=m=0.5")  # 立体声分离
-                filters.append("earwax")  # 人声突出
-            
-            # 3. 最终清理
-            filters.append("silenceremove=start_periods=1:start_silence=0.1:start_threshold=0.02")
-            
-            if filters:
-                filter_chain = ",".join(filters)
-                
-                cmd = [
-                    "ffmpeg", "-y", "-i", audio_path,
-                    "-af", filter_chain,
-                    "-acodec", "pcm_s16le",
-                    "-loglevel", "error",
-                    temp_path
-                ]
-                
-                result = subprocess.run(cmd, capture_output=True, text=True)
-                if result.returncode != 0:
-                    # 后处理失败时直接复制
-                    import shutil
-                    shutil.copy2(audio_path, temp_path)
-            else:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                logger.warning("后处理失败，使用原始音频")
                 import shutil
                 shutil.copy2(audio_path, temp_path)
                 
@@ -379,7 +377,8 @@ class AdvancedAudioPreprocessor:
         except Exception as e:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
-            # 失败时直接复制原文件
+            
+            logger.warning(f"高级后处理失败: {e}")
             import shutil
             shutil.copy2(audio_path, temp_path)
             return temp_path
