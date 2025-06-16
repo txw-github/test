@@ -4,7 +4,7 @@ import json
 import os
 import jieba
 import zhon.hanzi
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 import logging
 
 logger = logging.getLogger(__name__)
