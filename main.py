@@ -1061,8 +1061,8 @@ class VideoSubtitleExtractor:
         else:
             raise ValueError(f"不支持的模型: {model_id}")
 
-    def extract_audio(self, video_path: str, audio_path: str = None) -> Optional[str]:
-        """从视频提取音频"""
+    def extract_audio(self, video_path: str, audio_path: str = None, enable_preprocessing: bool = True, audio_quality: str = "balanced") -> Optional[str]:
+        """从视频提取音频，支持高级预处理"""
         if not audio_path:
             base_name = os.path.splitext(os.path.basename(video_path))[0]
             temp_path = self.config.get('temp_path', './temp')
@@ -1074,49 +1074,96 @@ class VideoSubtitleExtractor:
             return None
 
         try:
-            progress = ProgressTracker(100, "提取音频")
+            progress = ProgressTracker(100, "提取和处理音频")
+            raw_audio_path = None
 
-            with Timer("音频提取"):
+            with Timer("音频提取和预处理"):
                 progress.update(10, "检查视频文件...")
 
+                # 如果启用预处理，先提取到临时文件
+                if enable_preprocessing:
+                    raw_audio_path = os.path.join(os.path.dirname(audio_path), f"raw_{os.path.basename(audio_path)}")
+                    actual_output = raw_audio_path
+                else:
+                    actual_output = audio_path
+
                 if MOVIEPY_AVAILABLE:
-                    progress.update(20, "使用MoviePy提取音频...")
+                    progress.update(15, "使用MoviePy提取音频...")
                     video = VideoFileClip(video_path)
                     audio = video.audio
-                    progress.update(30, "写入音频文件...")
+                    progress.update(15, "写入音频文件...")
                     audio.write_audiofile(
-                        audio_path, 
+                        actual_output, 
                         fps=self.config.get('audio_sample_rate', 16000), 
                         verbose=False, 
                         logger=None
                     )
-                    progress.update(30, "清理资源...")
+                    progress.update(10, "清理资源...")
                     video.close()
                     audio.close()
                 else:
-                    progress.update(20, "使用FFmpeg提取音频...")
+                    progress.update(15, "使用FFmpeg提取音频...")
                     cmd = [
                         "ffmpeg", "-y", "-i", video_path,
                         "-vn", "-acodec", "pcm_s16le", 
                         "-ar", str(self.config.get('audio_sample_rate', 16000)), 
-                        "-ac", "1", audio_path
+                        "-ac", "1", actual_output, "-loglevel", "error"
                     ]
                     subprocess.run(cmd, check=True, capture_output=True)
-                    progress.update(60, "音频提取完成")
+                    progress.update(25, "音频提取完成")
+
+                # 如果启用预处理，进行高级音频处理
+                if enable_preprocessing and os.path.exists(raw_audio_path):
+                    progress.update(20, f"开始{audio_quality}质量音频预处理...")
+                    
+                    try:
+                        from audio_preprocessor import AdvancedAudioPreprocessor
+                        preprocessor = AdvancedAudioPreprocessor(
+                            target_sample_rate=self.config.get('audio_sample_rate', 16000)
+                        )
+                        
+                        # 进行高级预处理
+                        processed_path = preprocessor.preprocess_audio(
+                            raw_audio_path, 
+                            audio_path, 
+                            quality=audio_quality
+                        )
+                        
+                        progress.update(30, "音频预处理完成")
+                        
+                        # 清理原始音频文件
+                        if os.path.exists(raw_audio_path):
+                            os.remove(raw_audio_path)
+                        
+                        logger.info(f"✨ 音频预处理完成，质量等级: {audio_quality}")
+                        
+                    except Exception as e:
+                        logger.warning(f"音频预处理失败，使用原始音频: {e}")
+                        # 预处理失败时，将原始文件重命名为最终文件
+                        if os.path.exists(raw_audio_path):
+                            if os.path.exists(audio_path):
+                                os.remove(audio_path)
+                            os.rename(raw_audio_path, audio_path)
 
                 progress.update(10, "验证音频文件...")
                 if os.path.exists(audio_path):
                     file_size = os.path.getsize(audio_path) / 1024 / 1024
                     progress.close()
-                    logger.info(f"✅ 音频提取成功: {audio_path} ({file_size:.1f}MB)")
+                    logger.info(f"✅ 音频处理成功: {audio_path} ({file_size:.1f}MB)")
                     return audio_path
                 else:
                     progress.close()
-                    logger.error("❌ 音频提取失败")
+                    logger.error("❌ 音频处理失败")
                     return None
 
         except Exception as e:
-            logger.error(f"❌ 音频提取出错: {e}")
+            logger.error(f"❌ 音频处理出错: {e}")
+            # 清理临时文件
+            if raw_audio_path and os.path.exists(raw_audio_path):
+                try:
+                    os.remove(raw_audio_path)
+                except:
+                    pass
             return None
 
     def transcribe_audio(self, audio_path: str, **kwargs) -> Dict[str, Any]:
@@ -1269,6 +1316,16 @@ def main():
     parser.add_argument("--no-postprocess", action="store_true", help="禁用文本后处理")
     parser.add_argument("--add-term", nargs=2, metavar=('CORRECT', 'WRONG'), 
                         help="添加自定义纠错词汇: --add-term '正确词' '错误词'")
+    parser.add_argument("--audio-quality", choices=["fast", "balanced", "high"], default="balanced",
+                        help="音频预处理质量 (fast/balanced/high)")
+    parser.add_argument("--enable-audio-preprocessing", action="store_true", default=True,
+                        help="启用高级音频预处理")
+    parser.add_argument("--precision", choices=["fp16", "fp32"], default="fp16",
+                        help="模型精度选择 (fp16更快，fp32更精确)")
+    parser.add_argument("--analyze-audio", action="store_true", 
+                        help="分析音频质量并提供优化建议")
+    parser.add_argument("--analyze-text", action="store_true",
+                        help="分析文本质量并提供优化建议")
 
     args = parser.parse_args()
 
@@ -1334,17 +1391,43 @@ def main():
             config=config
         )
 
-        # 提取音频
-        audio_path = extractor.extract_audio(args.video_path)
+        # 提取音频（支持预处理）
+        audio_path = extractor.extract_audio(
+            args.video_path,
+            enable_preprocessing=args.enable_audio_preprocessing,
+            audio_quality=args.audio_quality
+        )
         if not audio_path:
             logger.error("❌ 音频提取失败")
             return
+
+        # 音频质量分析（可选）
+        if args.analyze_audio:
+            try:
+                from audio_preprocessor import AdvancedAudioPreprocessor
+                preprocessor = AdvancedAudioPreprocessor()
+                audio_metrics = preprocessor.analyze_audio_quality(audio_path)
+                
+                if audio_metrics:
+                    logger.info(f"📊 音频质量分析结果:")
+                    logger.info(f"   - 综合评分: {audio_metrics.get('overall_score', 0):.1f}/100")
+                    logger.info(f"   - 中文适配度: {audio_metrics.get('chinese_speech_score', 0):.1f}/100")
+                    logger.info(f"   - 语音清晰度: {audio_metrics.get('speech_clarity', 0):.2f}")
+                    logger.info(f"   - 噪声水平: {audio_metrics.get('noise_level', 0):.1f}")
+                    
+                    recommendations = audio_metrics.get('recommendations', [])
+                    if recommendations:
+                        logger.info("📝 优化建议:")
+                        for rec in recommendations:
+                            logger.info(f"   - {rec}")
+            except Exception as e:
+                logger.warning(f"音频质量分析失败: {e}")
 
         # 转录音频
         result = extractor.transcribe_audio(
             audio_path,
             language=args.language,
-            temperature=0.0
+            temperature=0.0 if args.precision == "fp16" else 0.1
         )
 
         if not result["segments"]:
@@ -1359,6 +1442,30 @@ def main():
             logger.info(f"📝 共识别到 {len(result['segments'])} 个字幕片段")
             if enable_postprocess:
                 logger.info("✨ 已应用智能文本纠错")
+                
+            # 文本质量分析（可选）
+            if args.analyze_text:
+                try:
+                    postprocessor = TextPostProcessor()
+                    full_text = " ".join([seg["text"] for seg in result["segments"]])
+                    text_analysis = postprocessor.analyze_text_quality(full_text)
+                    
+                    logger.info(f"📊 文本质量分析结果:")
+                    logger.info(f"   - 质量评分: {text_analysis['quality_score']}")
+                    logger.info(f"   - 错误率: {text_analysis['error_rate']}%")
+                    
+                    error_stats = text_analysis['error_statistics']
+                    logger.info(f"   - 潜在同音字错误: {error_stats['sound_alike_errors']} 处")
+                    logger.info(f"   - 专业术语错误: {error_stats['professional_terms']} 处")
+                    logger.info(f"   - 语气词冗余: {error_stats['filler_words']} 处")
+                    
+                    recommendations = text_analysis['recommendations']
+                    if recommendations:
+                        logger.info("📝 文本优化建议:")
+                        for rec in recommendations:
+                            logger.info(f"   - {rec}")
+                except Exception as e:
+                    logger.warning(f"文本质量分析失败: {e}")
         else:
             logger.error("❌ 字幕文件创建失败")
 

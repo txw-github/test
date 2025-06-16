@@ -30,7 +30,9 @@
     "tone_preservation": true,
     "consonant_enhancement": true,
     "frequency_profile": "mandarin",
-    "voice_activity_detection": true
+    "voice_activity_detection": true,
+    "mandarin_specific_eq": true,
+    "tonal_range_protection": true
   },
   "quality_thresholds": {
     "min_duration": 0.5,
@@ -43,18 +45,25 @@
       "description": "最高质量处理，适合专业转录",
       "noise_reduction_strength": 0.8,
       "voice_enhancement": true,
-      "chinese_optimization": true
+      "chinese_optimization": true,
+      "advanced_processing": true,
+      "multi_stage_processing": true
     },
     "balanced": {
       "description": "平衡质量与速度",
       "noise_reduction_strength": 0.6,
       "voice_enhancement": true,
-      "chinese_optimization": true
+      "chinese_optimization": true,
+      "advanced_processing": true,
+      "multi_stage_processing": false
     },
     "fast": {
       "description": "快速处理，基础优化",
       "noise_reduction_strength": 0.4,
       "voice_enhancement": false,
+      "chinese_optimization": true,
+      "advanced_processing": false,
+      "multi_stage_processing": falset": false,
       "chinese_optimization": false
     }
   }
