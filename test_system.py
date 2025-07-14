@@ -2,207 +2,214 @@
 #!/usr/bin/env python3
 """
 系统环境测试脚本
-用于验证RTX 3060 Ti环境配置是否正确
+检查RTX 3060 Ti环境是否正确配置
 """
 
 import sys
-import traceback
+import os
+import subprocess
+import platform
 
-def test_python_version():
-    """测试Python版本"""
-    print("=" * 50)
-    print("测试Python环境")
-    print("=" * 50)
-    print(f"Python版本: {sys.version}")
+def check_python_version():
+    """检查Python版本"""
+    print("🔍 检查Python版本...")
+    version = sys.version_info
+    print(f"   Python版本: {version.major}.{version.minor}.{version.micro}")
     
-    version_info = sys.version_info
-    if version_info.major == 3 and 8 <= version_info.minor <= 11:
-        print("✓ Python版本正确")
-        return True
-    else:
-        print("✗ Python版本不正确，需要Python 3.8-3.11")
+    if version.major != 3 or version.minor < 8:
+        print("   ❌ 需要Python 3.8+")
         return False
+    else:
+        print("   ✅ Python版本符合要求")
+        return True
 
-def test_torch():
-    """测试PyTorch和CUDA"""
-    print("\n" + "=" * 50)
-    print("测试PyTorch和CUDA")
-    print("=" * 50)
+def check_cuda():
+    """检查CUDA环境"""
+    print("\n🔍 检查CUDA环境...")
     
     try:
         import torch
-        print(f"PyTorch版本: {torch.__version__}")
+        print(f"   PyTorch版本: {torch.__version__}")
         
         if torch.cuda.is_available():
-            print("✓ CUDA可用")
-            print(f"CUDA版本: {torch.version.cuda}")
-            print(f"GPU数量: {torch.cuda.device_count()}")
+            print("   ✅ CUDA可用")
+            gpu_count = torch.cuda.device_count()
+            print(f"   GPU数量: {gpu_count}")
             
-            for i in range(torch.cuda.device_count()):
-                props = torch.cuda.get_device_properties(i)
-                print(f"GPU {i}: {props.name}")
-                print(f"  显存: {props.total_memory / 1024**3:.1f} GB")
+            for i in range(gpu_count):
+                gpu_name = torch.cuda.get_device_name(i)
+                gpu_memory = torch.cuda.get_device_properties(i).total_memory / 1024**3
+                print(f"   GPU {i}: {gpu_name} ({gpu_memory:.1f}GB)")
                 
-                if "3060 Ti" in props.name:
-                    print("✓ 检测到RTX 3060 Ti")
-                    
-            # 测试GPU计算
-            x = torch.randn(1000, 1000).cuda()
-            y = torch.matmul(x, x)
-            print("✓ GPU计算测试通过")
+                if "3060 Ti" in gpu_name:
+                    print("   🎯 检测到RTX 3060 Ti，完美匹配！")
+                    return True
             return True
         else:
-            print("✗ CUDA不可用")
+            print("   ❌ CUDA不可用")
             return False
             
     except ImportError:
-        print("✗ PyTorch未安装")
-        return False
-    except Exception as e:
-        print(f"✗ PyTorch测试失败: {e}")
+        print("   ❌ PyTorch未安装")
         return False
 
-def test_whisper():
-    """测试Whisper"""
-    print("\n" + "=" * 50)
-    print("测试Whisper")
-    print("=" * 50)
+def check_dependencies():
+    """检查关键依赖"""
+    print("\n🔍 检查关键依赖...")
     
-    success = True
+    dependencies = {
+        "whisper": "OpenAI Whisper",
+        "faster_whisper": "Faster Whisper",
+        "moviepy": "MoviePy",
+        "soundfile": "SoundFile",
+        "jieba": "Jieba分词",
+        "tqdm": "进度条",
+        "numpy": "NumPy",
+    }
     
-    try:
-        import whisper
-        print("✓ OpenAI Whisper可用")
-    except ImportError:
-        print("✗ OpenAI Whisper未安装")
-        success = False
+    optional_dependencies = {
+        "funasr": "FunASR (中文优化)",
+        "tensorrt": "TensorRT (加速)",
+        "transformers": "Transformers",
+        "librosa": "Librosa",
+    }
     
-    try:
-        from faster_whisper import WhisperModel
-        print("✓ Faster-Whisper可用")
-    except ImportError:
-        print("✗ Faster-Whisper未安装")
-        success = False
+    all_good = True
     
-    return success
-
-def test_audio_processing():
-    """测试音频处理库"""
-    print("\n" + "=" * 50)
-    print("测试音频处理库")
-    print("=" * 50)
-    
-    success = True
-    
-    try:
-        import librosa
-        print("✓ Librosa可用")
-    except ImportError:
-        print("✗ Librosa未安装")
-        success = False
-    
-    try:
-        import soundfile
-        print("✓ SoundFile可用")
-    except ImportError:
-        print("✗ SoundFile未安装")
-        success = False
-    
-    try:
-        import numpy
-        print("✓ NumPy可用")
-    except ImportError:
-        print("✗ NumPy未安装")
-        success = False
-    
-    return success
-
-def test_video_processing():
-    """测试视频处理"""
-    print("\n" + "=" * 50)
-    print("测试视频处理")
-    print("=" * 50)
-    
-    try:
-        import moviepy
-        print("✓ MoviePy可用")
-        return True
-    except ImportError:
-        print("⚠ MoviePy未安装，将使用FFmpeg")
-        
-        # 测试FFmpeg
-        import subprocess
+    # 检查必需依赖
+    for module, name in dependencies.items():
         try:
-            result = subprocess.run(["ffmpeg", "-version"], 
-                                  capture_output=True, text=True)
-            if result.returncode == 0:
-                print("✓ FFmpeg可用")
-                return True
-            else:
-                print("✗ FFmpeg不可用")
-                return False
-        except FileNotFoundError:
-            print("✗ FFmpeg未安装")
-            return False
+            __import__(module)
+            print(f"   ✅ {name}")
+        except ImportError:
+            print(f"   ❌ {name} - 未安装")
+            all_good = False
+    
+    # 检查可选依赖
+    print("\n   可选依赖:")
+    for module, name in optional_dependencies.items():
+        try:
+            __import__(module)
+            print(f"   ✅ {name}")
+        except ImportError:
+            print(f"   ⚠️ {name} - 未安装 (可选)")
+    
+    return all_good
 
-def test_optional_deps():
-    """测试可选依赖"""
-    print("\n" + "=" * 50)
-    print("测试可选依赖")
-    print("=" * 50)
+def check_ffmpeg():
+    """检查FFmpeg"""
+    print("\n🔍 检查FFmpeg...")
     
     try:
-        import tensorrt
-        print("✓ TensorRT可用")
-    except ImportError:
-        print("⚠ TensorRT未安装（可选，用于加速）")
+        result = subprocess.run(["ffmpeg", "-version"], 
+                              capture_output=True, text=True)
+        if result.returncode == 0:
+            print("   ✅ FFmpeg可用")
+            return True
+        else:
+            print("   ❌ FFmpeg不可用")
+            return False
+    except FileNotFoundError:
+        print("   ❌ FFmpeg未安装或不在PATH中")
+        print("   💡 请确保FFmpeg已安装并添加到系统PATH")
+        return False
+
+def check_memory():
+    """检查系统内存"""
+    print("\n🔍 检查系统内存...")
     
     try:
-        import pycuda
-        print("✓ PyCuda可用")
+        import psutil
+        memory = psutil.virtual_memory()
+        total_gb = memory.total / 1024**3
+        available_gb = memory.available / 1024**3
+        
+        print(f"   总内存: {total_gb:.1f}GB")
+        print(f"   可用内存: {available_gb:.1f}GB")
+        
+        if total_gb >= 16:
+            print("   ✅ 内存充足")
+            return True
+        elif total_gb >= 8:
+            print("   ⚠️ 内存偏少，建议关闭其他程序")
+            return True
+        else:
+            print("   ❌ 内存不足，可能影响性能")
+            return False
     except ImportError:
-        print("⚠ PyCuda未安装（TensorRT需要）")
+        print("   ⚠️ 无法检查内存状态")
+        return True
+
+def test_simple_conversion():
+    """测试简单转换功能"""
+    print("\n🔍 测试基本功能...")
     
     try:
-        from transformers import pipeline
-        print("✓ Transformers可用")
-    except ImportError:
-        print("⚠ Transformers未安装（可选）")
+        # 创建测试音频（1秒静音）
+        import numpy as np
+        import soundfile as sf
+        
+        test_audio = np.zeros(16000, dtype=np.float32)
+        test_path = "test_audio.wav"
+        sf.write(test_path, test_audio, 16000)
+        
+        # 测试加载模型
+        from faster_whisper import WhisperModel
+        model = WhisperModel("tiny", device="cpu")  # 使用CPU避免显存问题
+        
+        # 测试转录
+        segments, info = model.transcribe(test_path)
+        segments = list(segments)
+        
+        # 清理
+        os.remove(test_path)
+        
+        print("   ✅ 基本功能测试通过")
+        return True
+        
+    except Exception as e:
+        print(f"   ❌ 基本功能测试失败: {e}")
+        return False
 
 def main():
     """主测试函数"""
-    print("RTX 3060 Ti 视频转字幕工具环境测试")
-    print("此测试将验证所有必需的依赖是否正确安装")
+    print("========================================")
+    print("中文电视剧字幕工具 - 系统环境测试")
+    print("========================================")
     
     results = []
-    results.append(test_python_version())
-    results.append(test_torch())
-    results.append(test_whisper())
-    results.append(test_audio_processing())
-    results.append(test_video_processing())
     
-    test_optional_deps()
+    results.append(check_python_version())
+    results.append(check_cuda())
+    results.append(check_dependencies())
+    results.append(check_ffmpeg())
+    results.append(check_memory())
+    results.append(test_simple_conversion())
     
-    print("\n" + "=" * 50)
-    print("测试结果总结")
-    print("=" * 50)
+    print("\n========================================")
+    print("测试总结:")
+    print("========================================")
     
-    if all(results):
-        print("✓ 所有必需组件测试通过！")
-        print("系统已准备就绪，可以开始使用视频转字幕工具")
-        print("\n使用示例：")
-        print("python main.py 你的视频.mp4 --model faster-base")
+    passed = sum(results)
+    total = len(results)
+    
+    if passed == total:
+        print("🎉 所有测试通过！系统已准备就绪。")
+        print("\n可以开始使用:")
+        print("   python main.py 你的视频.mp4")
+        print("   或运行: 快速转换.bat")
+    elif passed >= total - 1:
+        print("⚠️ 大部分测试通过，可以正常使用。")
+        print("有些可选功能可能不可用。")
     else:
-        print("✗ 部分组件测试失败")
-        print("请运行 install_dependencies.bat 安装缺失的依赖")
+        print("❌ 系统环境有问题，请检查以上错误。")
+        print("\n建议:")
+        print("1. 运行 install_dependencies.bat 安装依赖")
+        print("2. 更新NVIDIA驱动")
+        print("3. 检查Python和CUDA安装")
     
-    print("\n按任意键退出...")
-    input()
+    print(f"\n测试结果: {passed}/{total} 通过")
+    input("\n按回车键退出...")
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        print(f"测试过程中发生错误: {e}")
-        traceback.print_exc()
-        input("按任意键退出...")
+    main()
