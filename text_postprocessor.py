@@ -9,6 +9,16 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+class TextPostProcessor:
+    """高级文本后处理器 - 专门优化中文识别结果"""
+    
+    def __init__(self):
+        self.load_correction_data()
+        
+    def load_correction_data(self):
+        """加载纠错数据"""
+
 class TextPostProcessor:
     """增强版文本后处理器 - 专业处理中文语音识别错误"""
 
@@ -271,7 +281,146 @@ class TextPostProcessor:
             "导演": ["道演", "倒演", "到演", "盗演"],
             "编剧": ["编据", "编局", "编剧", "便剧"],
             "制片": ["制篇", "制片", "制偏", "治片"],
-            "监制": ["监制", "坚制", "间制", "监支"],
+            "监制": ["监制", "坚制", "建制", "检制"]
+        }
+
+    def post_process(self, text: str) -> str:
+        """文本后处理主函数"""
+        if not text:
+            return text
+            
+        try:
+            # 应用各种纠错规则
+            text = self._correct_professional_terms(text)
+            text = self._correct_polyphone_errors(text)
+            text = self._correct_filler_words(text)
+            text = self._add_punctuation(text)
+            text = self._smart_sentence_segmentation(text)
+            
+            return text.strip()
+        except Exception as e:
+            logger.warning(f"文本后处理失败: {e}")
+            return text
+
+    def _correct_professional_terms(self, text: str) -> str:
+        """纠正专业术语"""
+        corrections_made = 0
+        
+        # 合并所有专业术语字典
+        all_terms = {}
+        if hasattr(self, 'professional_corrections'):
+            all_terms.update(self.professional_corrections)
+        if hasattr(self, 'tv_drama_terms'):
+            all_terms.update(self.tv_drama_terms)
+            
+        for correct, wrong_list in all_terms.items():
+            for wrong in wrong_list:
+                if wrong in text:
+                    text = text.replace(wrong, correct)
+                    corrections_made += 1
+                    
+        if corrections_made > 0:
+            logger.debug(f"专业术语纠正: {corrections_made} 处")
+        return text
+
+    def _correct_polyphone_errors(self, text: str) -> str:
+        """纠正多音字错误"""
+        # 简化的多音字纠错
+        polyphone_map = {
+            "银行": ["音行", "印行"],
+            "重要": ["种要", "中要"],
+            "处理": ["出理", "除理"],
+            "数量": ["树量", "束量"]
+        }
+        
+        corrections_made = 0
+        for correct, wrong_list in polyphone_map.items():
+            for wrong in wrong_list:
+                if wrong in text:
+                    text = text.replace(wrong, correct)
+                    corrections_made += 1
+                    
+        if corrections_made > 0:
+            logger.debug(f"多音字纠正: {corrections_made} 处")
+        return text
+
+    def _correct_filler_words(self, text: str) -> str:
+        """纠正语气词和填充词"""
+        if hasattr(self, 'filler_corrections'):
+            corrections_made = 0
+            for correct, wrong in self.filler_corrections.items():
+                if wrong in text:
+                    text = text.replace(wrong, correct)
+                    corrections_made += 1
+            
+            if corrections_made > 0:
+                logger.debug(f"语气词纠正: {corrections_made} 处")
+        
+        return text
+
+    def _add_punctuation(self, text: str) -> str:
+        """智能添加标点符号"""
+        # 简化的标点添加
+        text = re.sub(r'(\s+)', ' ', text)  # 规范化空格
+        text = re.sub(r'([。！？])\s*([a-zA-Z\u4e00-\u9fff])', r'\1\n\2', text)  # 句末换行
+        
+        return text
+
+    def _smart_sentence_segmentation(self, text: str) -> str:
+        """智能断句"""
+        # 基于语义的简单断句
+        pause_markers = ['那么', '然后', '接着', '所以', '因此', '但是', '不过', '而且']
+        
+        for marker in pause_markers:
+            text = text.replace(marker, f'，{marker}')
+            
+        return text
+
+    def get_correction_stats(self, text: str) -> Dict[str, int]:
+        """获取纠错统计"""
+        stats = {
+            'professional_terms': 0,
+            'polyphone_errors': 0,
+            'number_units': 0
+        }
+        
+        # 简单统计
+        if hasattr(self, 'professional_corrections'):
+            for correct, wrong_list in self.professional_corrections.items():
+                for wrong in wrong_list:
+                    stats['professional_terms'] += text.count(wrong)
+        
+        return stats
+
+    def analyze_text_quality(self, text: str) -> Dict[str, Any]:
+        """分析文本质量"""
+        stats = self.get_correction_stats(text)
+        total_errors = sum(stats.values())
+        total_chars = len(text)
+        
+        error_rate = (total_errors / total_chars * 100) if total_chars > 0 else 0
+        quality_score = max(0, 100 - error_rate * 2)
+        
+        return {
+            'quality_score': f"{quality_score:.1f}/100",
+            'error_rate': f"{error_rate:.1f}",
+            'error_statistics': {
+                'sound_alike_errors': stats.get('polyphone_errors', 0),
+                'professional_terms': stats.get('professional_terms', 0),
+                'filler_words': 0
+            },
+            'recommendations': [
+                "建议启用多模型融合以提高准确性",
+                "可考虑使用更高质量的音频预处理"
+            ] if error_rate > 5 else []
+        }
+
+    def add_custom_correction(self, correct_word: str, wrong_words: List[str]):
+        """添加自定义纠错规则"""
+        if not hasattr(self, 'custom_corrections'):
+            self.custom_corrections = {}
+        self.custom_corrections[correct_word] = wrong_words
+        logger.info(f"已添加自定义纠错: {correct_word} <- {wrong_words}") "间制", "监支"],
             "制作": ["制做", "制作", "治作", "制昨"],
             "拍摄": ["拍射", "拍设", "派摄", "拍摄"],
             "剪辑": ["剪集", "减辑", "剪及", "见辑"],

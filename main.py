@@ -498,6 +498,151 @@ class EnhancedVideoSubtitleExtractor:
                 if enable_preprocessing and os.path.exists(raw_audio_path):
                     progress.update(20, f"开始{audio_quality}质量音频预处理...")
 
+class WhisperModelWrapper:
+    """Whisper模型包装器"""
+    def __init__(self, model_id: str, device: str = "cuda", config: Config = None, **kwargs):
+        self.model_id = model_id
+        self.device = device
+        self.config = config or Config()
+        self.model = None
+        self.use_tensorrt = kwargs.get('use_tensorrt', False)
+
+    def load_model(self):
+        """加载Whisper模型"""
+        try:
+            logger.info(f"[LOADING] 加载Whisper模型: {self.model_id}")
+            
+            if self.model_id.startswith("faster-"):
+                model_size = self.model_id.replace("faster-", "")
+                self.model = WhisperModel(
+                    model_size, 
+                    device=self.device,
+                    compute_type="float16" if self.device == "cuda" else "float32"
+                )
+            else:
+                self.model = whisper.load_model(self.model_id, device=self.device)
+            
+            logger.info(f"[OK] Whisper模型加载成功")
+        except Exception as e:
+            logger.error(f"[ERROR] Whisper模型加载失败: {e}")
+            raise
+
+    def transcribe(self, audio_path: str, **kwargs) -> Dict[str, Any]:
+        """Whisper转录"""
+        try:
+            if self.model_id.startswith("faster-"):
+                # Faster-Whisper
+                segments, info = self.model.transcribe(
+                    audio_path, 
+                    beam_size=5,
+                    language=kwargs.get('language', 'zh'),
+                    temperature=kwargs.get('temperature', 0.0)
+                )
+                
+                segment_list = []
+                for segment in segments:
+                    segment_list.append({
+                        "start": segment.start,
+                        "end": segment.end,
+                        "text": segment.text
+                    })
+                
+                return {
+                    "segments": segment_list,
+                    "language": info.language,
+                    "text": " ".join([s["text"] for s in segment_list])
+                }
+            else:
+                # OpenAI Whisper
+                result = self.model.transcribe(
+                    audio_path,
+                    language=kwargs.get('language', 'zh'),
+                    temperature=kwargs.get('temperature', 0.0)
+                )
+                return result
+                
+        except Exception as e:
+            logger.error(f"[ERROR] Whisper转录失败: {e}")
+            raise
+
+    def get_gpu_memory_usage(self) -> float:
+        """获取GPU显存使用量"""
+        if torch.cuda.is_available():
+            return torch.cuda.memory_allocated() / 1024 / 1024
+        return 0.0
+
+
+class FunASRModelWrapper:
+    """FunASR模型包装器"""
+    def __init__(self, model_id: str, device: str = "cuda", config: Config = None, **kwargs):
+        self.model_id = model_id
+        self.device = device
+        self.config = config or Config()
+        self.model = None
+
+    def load_model(self):
+        """加载FunASR模型"""
+        try:
+            if not FUNASR_AVAILABLE:
+                raise ImportError("FunASR库未安装，请运行: pip install funasr")
+
+            logger.info(f"[LOADING] 加载FunASR模型: {self.model_id}")
+            
+            if "paraformer" in self.model_id:
+                model_name = "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
+            else:
+                model_name = "iic/speech_conformer_asr_nat-zh-cn-16k-aishell1-vocab4234-pytorch"
+            
+            self.model = AutoModel(
+                model=model_name,
+                device=self.device
+            )
+            
+            logger.info(f"[OK] FunASR模型加载成功")
+        except Exception as e:
+            logger.error(f"[ERROR] FunASR模型加载失败: {e}")
+            raise
+
+    def transcribe(self, audio_path: str, **kwargs) -> Dict[str, Any]:
+        """FunASR转录"""
+        try:
+            result = self.model.generate(input=audio_path)
+            
+            # 转换为统一格式
+            if result and len(result) > 0:
+                text = result[0]["text"] if isinstance(result[0], dict) else str(result[0])
+                
+                # 简单的时间戳生成（FunASR可能不提供详细时间戳）
+                import soundfile as sf
+                audio_data, sample_rate = sf.read(audio_path)
+                duration = len(audio_data) / sample_rate
+                
+                segments = [{
+                    "start": 0.0,
+                    "end": duration,
+                    "text": text
+                }]
+                
+                return {
+                    "segments": segments,
+                    "language": "zh",
+                    "text": text
+                }
+            else:
+                return {"segments": [], "language": "zh", "text": ""}
+                
+        except Exception as e:
+            logger.error(f"[ERROR] FunASR转录失败: {e}")
+            raise
+
+    def get_gpu_memory_usage(self) -> float:
+        """获取GPU显存使用量"""
+        if torch.cuda.is_available():
+            return torch.cuda.memory_allocated() / 1024 / 1024
+        return 0.0
+
+
+
                     try:
                         from audio_preprocessor import AdvancedAudioPreprocessor
                         preprocessor = AdvancedAudioPreprocessor(
@@ -658,6 +803,9 @@ class EnhancedVideoSubtitleExtractor:
 
             logger.info("[OK] 智能文本处理完成")
             return result
+        except Exception as e:
+            logger.warning(f"[WARNING] 智能文本处理失败: {e}")
+            return result
 
     def _redistribute_text(self, original_segments: List[Dict], processed_text: str) -> List[Dict]:
         """将处理后的文本重新分配到片段"""
@@ -805,8 +953,7 @@ class EnhancedVideoSubtitleExtractor:
         except Exception as e:
             logger.warning(f"[WARNING] 清理过程中出现错误: {e}")
 
-# 导入模型包装器类
-from main import WhisperModelWrapper, FunASRModelWrapper
+# 模型包装器类定义
 
 # 新增FireRedASR模型包装器
 class FireRedASRModelWrapper:
