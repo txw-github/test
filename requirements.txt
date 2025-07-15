@@ -1,51 +1,51 @@
+
+# 核心依赖
 torch>=2.0.0
 torchaudio>=2.0.0
 torchvision>=0.15.0
+
+# Whisper 模型
 openai-whisper>=20231117
 faster-whisper>=0.10.0
+
+# Hugging Face 相关
 transformers>=4.35.0
+huggingface-hub>=0.17.0
 accelerate>=0.24.0
 datasets>=2.14.0
+
+# 音视频处理
 moviepy>=1.0.3
-tqdm>=4.66.0
-psutil>=5.9.0
-soundfile>=0.12.1
-numpy>=1.24.0
-pydub>=0.25.1
-ffmpeg-python>=0.2.0
-funasr>=1.0.0
-
-# ModelScope (FireRedASR)
-modelscope>=1.9.0
-
-# 音频处理
 librosa>=0.10.1
 soundfile>=0.12.1
 pyloudnorm>=0.1.0
-scipy>=1.11.0
+pydub>=0.25.1
+ffmpeg-python>=0.2.0
+
+# 数学和科学计算
 numpy>=1.24.0
+scipy>=1.11.0
 
-# 视频处理
-moviepy>=1.0.3
-
-# 工具库
-tqdm>=4.65.0
+# 进度条和工具
+tqdm>=4.66.0
 psutil>=5.9.0
+
+# 中文处理
 jieba>=0.42.1
 cn2an>=0.5.23
 zhon>=1.1.5
 
-# GPU加速依赖
+# 可选：FunASR
+funasr>=1.0.0
+modelscope>=1.9.0
+
+# 可选：GPU加速
 onnx>=1.14.0
 onnxruntime-gpu>=1.16.0
 onnxsim>=0.4.0
 pycuda>=2022.1
 
-# TensorRT (可选，需要NVIDIA开发者账号)
-# tensorrt>=8.6.0
-
-# 开发工具
+# 开发和测试
 pytest>=7.4.0
 black>=23.0.0
 flake8>=6.0.0
-whisper
