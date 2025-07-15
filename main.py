@@ -34,10 +34,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 设置FFmpeg路径
-ffmpeg_path = r"D:\code\ffmpeg\bin"
-if os.path.exists(ffmpeg_path):
-    os.environ["PATH"] += os.pathsep + ffmpeg_path
+# 设置FFmpeg路径 (Replit环境适配)
+ffmpeg_paths = [
+    r"D:\code\ffmpeg\bin",  # Windows本地路径
+    "/usr/bin",             # Linux系统路径
+    "/usr/local/bin"        # 备用路径
+]
+
+for ffmpeg_path in ffmpeg_paths:
+    if os.path.exists(ffmpeg_path):
+        if ffmpeg_path not in os.environ.get("PATH", ""):
+            os.environ["PATH"] += os.pathsep + ffmpeg_path
+        break
 
 # 模型配置
 SUPPORTED_MODELS = {
@@ -148,14 +156,14 @@ SUPPORTED_MODELS = {
     # 中文优化模型
     "chinese-whisper-small": {
         "size": "461MB", 
-        "model_id": "openai/whisper-small",
+        "model_id": "small",
         "description": "中文优化的小模型",
         "vram": "1.5GB",
         "rtx3060ti": "excellent"
     },
     "chinese-whisper-base": {
         "size": "142MB", 
-        "model_id": "openai/whisper-base",
+        "model_id": "base",
         "description": "中文优化的基础模型",
         "vram": "1GB",
         "rtx3060ti": "excellent"
@@ -212,7 +220,7 @@ except ImportError:
     HF_HUB_AVAILABLE = False
     logger.warning("Hugging Face Hub未安装")
 
-# TensorRT支持检查
+# TensorRT支持检查 (Replit环境通常不支持)
 try:
     import tensorrt as trt
     import pycuda.driver as cuda
@@ -221,7 +229,8 @@ try:
     logger.info(f"TensorRT版本: {trt.__version__}")
 except ImportError:
     TENSORRT_AVAILABLE = False
-    logger.warning("TensorRT未安装，无法使用TensorRT加速")
+    # 在Replit环境中，TensorRT通常不可用，这是正常的
+    pass
 
 try:
     import onnx
@@ -1044,11 +1053,19 @@ def main():
     if args.output is None:
         args.output = args.video_path.rsplit('.', 1)[0] + '.srt'
 
-    # 设置设备
+    # 设置设备 (自动检测CUDA可用性)
     if args.device == "auto":
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if torch.cuda.is_available():
+            device = "cuda"
+            logger.info("✅ 检测到CUDA，使用GPU加速")
+        else:
+            device = "cpu"
+            logger.info("ℹ️  未检测到CUDA，使用CPU模式")
     else:
         device = args.device
+        if device == "cuda" and not torch.cuda.is_available():
+            logger.warning("⚠️  指定使用CUDA但CUDA不可用，切换到CPU模式")
+            device = "cpu"
 
     # 创建配置
     config = Config(
