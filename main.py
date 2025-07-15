@@ -15,6 +15,7 @@ import time
 import json
 from pathlib import Path
 from typing import Optional, Dict, List, Any
+from model_manager import ModelManager
 
 # 设置环境变量
 os.environ['CUDA_LAZY_LOADING'] = '1'
@@ -205,23 +206,46 @@ class WhisperModel:
         self.model = None
         self.config = Config()
         self.text_processor = TextProcessor()
+        self.model_manager = ModelManager()
 
     def load_model(self):
         """加载模型"""
         logger.info(f"正在加载模型: {self.model_name}")
 
+        # 确定模型类型和完整名称
         if FASTER_WHISPER_AVAILABLE:
+            full_model_name = f"faster-whisper-{self.model_name}"
+            model_type = "faster-whisper"
+        elif WHISPER_AVAILABLE:
+            full_model_name = f"whisper-{self.model_name}"
+            model_type = "whisper"
+        else:
+            raise ImportError("没有可用的Whisper模型！")
+
+        # 自动下载模型
+        if not self.model_manager.is_model_downloaded(full_model_name):
+            logger.info(f"模型未找到，正在下载: {full_model_name}")
+            if not self.model_manager.download_model(full_model_name):
+                raise RuntimeError(f"模型下载失败: {full_model_name}")
+
+        # 获取模型路径
+        model_path = self.model_manager.get_model_path(full_model_name)
+        if not model_path:
+            raise RuntimeError(f"无法获取模型路径: {full_model_name}")
+
+        # 加载模型
+        if model_type == "faster-whisper":
             self.model = FasterWhisperModel(
-                self.model_name, 
+                model_path,
                 device=self.device,
                 compute_type="float16" if self.device == "cuda" else "int8"
             )
             logger.info("使用Faster-Whisper模型")
-        elif WHISPER_AVAILABLE:
-            self.model = whisper.load_model(self.model_name, device=self.device)
+        elif model_type == "whisper":
+            self.model = whisper.load_model(model_path, device=self.device)
             logger.info("使用OpenAI Whisper模型")
-        else:
-            raise ImportError("没有可用的Whisper模型！")
+
+        logger.info(f"模型加载完成: {model_path}")
 
     def transcribe(self, audio_path: str) -> List[Dict]:
         """转录音频"""
@@ -304,15 +328,40 @@ class SRTGenerator:
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(description="RTX 3060 Ti 视频转字幕工具")
-    parser.add_argument("video_path", help="视频文件路径")
+    parser.add_argument("video_path", nargs='?', help="视频文件路径")
     parser.add_argument("--model", default="base", 
                        choices=["tiny", "base", "small", "medium", "large"],
                        help="选择模型大小")
     parser.add_argument("--output", help="输出SRT文件路径")
     parser.add_argument("--device", default="auto", 
                        choices=["auto", "cuda", "cpu"], help="计算设备")
+    parser.add_argument("--list-models", action="store_true", help="列出所有可用模型")
+    parser.add_argument("--download-model", help="下载指定模型")
 
     args = parser.parse_args()
+
+    # 初始化模型管理器
+    model_manager = ModelManager()
+
+    # 处理列出模型命令
+    if args.list_models:
+        print("可用模型:")
+        for model in model_manager.list_models():
+            status = "✅" if model["downloaded"] else "❌"
+            print(f"  {status} {model['name']} ({model['size']})")
+        return
+
+    # 处理下载模型命令
+    if args.download_model:
+        if model_manager.download_model(args.download_model):
+            print(f"模型下载成功: {args.download_model}")
+        else:
+            print(f"模型下载失败: {args.download_model}")
+        return
+
+    # 检查是否提供了视频路径
+    if not args.video_path:
+        parser.error("请提供视频文件路径，或使用 --list-models 查看可用模型")
 
     # 检查输入文件
     if not os.path.exists(args.video_path):
