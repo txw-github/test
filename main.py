@@ -51,7 +51,7 @@ except ImportError:
     sys.exit(1)
 
 try:
-    from faster_whisper import WhisperModel
+    from faster_whisper import WhisperModel as FasterWhisperModel
     FASTER_WHISPER_AVAILABLE = True
 except ImportError:
     FASTER_WHISPER_AVAILABLE = False
@@ -211,7 +211,7 @@ class WhisperModel:
         logger.info(f"正在加载模型: {self.model_name}")
 
         if FASTER_WHISPER_AVAILABLE:
-            self.model = WhisperModel(
+            self.model = FasterWhisperModel(
                 self.model_name, 
                 device=self.device,
                 compute_type="float16" if self.device == "cuda" else "int8"
@@ -232,7 +232,7 @@ class WhisperModel:
         start_time = time.time()
 
         try:
-            if FASTER_WHISPER_AVAILABLE and hasattr(self.model, 'transcribe'):
+            if FASTER_WHISPER_AVAILABLE and isinstance(self.model, type(FasterWhisperModel("tiny", device="cpu"))):
                 # Faster-Whisper
                 segments, info = self.model.transcribe(
                     audio_path,
