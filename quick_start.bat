@@ -1,51 +1,81 @@
 
 @echo off
 chcp 65001
-echo ========================================
-echo 快速开始 - 中文电视剧音频转文字
-echo ========================================
+title RTX 3060 Ti 中文视频转字幕工具
 
-echo 检查环境...
-python --version >nul 2>&1
-if errorlevel 1 (
-    echo 请先运行 setup_environment.bat 安装环境
-    pause
-    exit /b 1
-)
-
-echo 环境检查通过✓
+echo ===============================================================
+echo    RTX 3060 Ti 中文视频转字幕工具 - 快速开始
+echo ===============================================================
 echo.
 
-echo 当前目录的视频文件：
-echo ----------------------------------------
-for %%f in (*.mp4 *.mkv *.avi *.mov *.wmv) do echo %%f
-echo ----------------------------------------
-
+echo 请选择操作模式:
 echo.
-echo 将使用默认设置：
-echo - 模型: faster-base （推荐RTX 3060 Ti）
-echo - 语言: 中文
-echo - 输出: output.srt
-
+echo 1. 单个视频文件转换
+echo 2. 批量目录处理 (推荐)
+echo 3. 系统环境测试
+echo 4. 查看支持的模型
+echo 5. 安装/更新依赖
 echo.
-set /p video_file="请输入要转换的视频文件名: "
 
+set /p choice="请输入选择 (1-5): "
+
+if "%choice%"=="1" goto single_file
+if "%choice%"=="2" goto batch_process
+if "%choice%"=="3" goto test_system
+if "%choice%"=="4" goto list_models
+if "%choice%"=="5" goto install_deps
+
+echo ❌ 无效选择
+pause
+exit
+
+:single_file
+echo.
+echo 🎬 单个视频文件转换模式
+echo.
+set /p video_file="请输入视频文件路径: "
 if not exist "%video_file%" (
-    echo 错误：文件不存在！
+    echo ❌ 文件不存在: %video_file%
     pause
-    exit /b 1
+    exit
 )
 
 echo.
-echo 开始转换 %video_file% ...
-python main.py "%video_file%" --model faster-base --language zh --output output.srt
+echo 推荐使用中文电视剧优化模式
+python main.py "%video_file%" --model faster-base --chinese-tv-optimized --audio-quality balanced
+goto end
 
+:batch_process
 echo.
-if exist "output.srt" (
-    echo ✓ 转换完成！字幕已保存为 output.srt
-    echo 您可以将此文件重命名并与视频一起使用
-) else (
-    echo ✗ 转换失败，请查看错误信息或运行 start_conversion.bat 尝试其他模型
-)
+echo 📁 批量目录处理模式 (推荐)
+echo.
+python batch_convert.py
+goto end
 
+:test_system
+echo.
+echo 🔍 系统环境测试
+echo.
+python test_system.py
+goto end
+
+:list_models
+echo.
+echo 🤖 查看支持的模型
+echo.
+python main.py --list-models
+goto end
+
+:install_deps
+echo.
+echo 📦 安装/更新依赖
+echo.
+call install_dependencies.bat
+goto end
+
+:end
+echo.
+echo ===============================================================
+echo 操作完成
+echo ===============================================================
 pause
