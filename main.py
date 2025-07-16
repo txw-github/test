@@ -983,6 +983,94 @@ def print_supported_models():
     print("  - 首次使用需要优化时间(约5-10分钟)")
 
 
+def process_directory(input_dir: str, output_dir: str, config: Config, model_name: str, device: str):
+    """处理目录下的所有视频文件"""
+    import glob
+    
+    # 支持的视频格式
+    video_extensions = ['*.mp4', '*.mkv', '*.avi', '*.mov', '*.wmv', '*.flv', '*.webm', '*.m4v']
+    
+    # 获取所有视频文件
+    video_files = []
+    for ext in video_extensions:
+        pattern = os.path.join(input_dir, '**', ext)
+        video_files.extend(glob.glob(pattern, recursive=True))
+    
+    if not video_files:
+        logger.warning(f"在目录 {input_dir} 中未找到支持的视频文件")
+        return
+    
+    logger.info(f"找到 {len(video_files)} 个视频文件")
+    
+    # 创建输出目录
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # 初始化模型（只需要初始化一次）
+    model = WhisperModel(model_name, device, config)
+    audio_processor = AudioProcessor(config)
+    
+    # 处理每个文件
+    success_count = 0
+    failed_files = []
+    
+    for i, video_file in enumerate(video_files, 1):
+        try:
+            logger.info(f"\n{'='*60}")
+            logger.info(f"处理文件 {i}/{len(video_files)}: {os.path.basename(video_file)}")
+            logger.info(f"{'='*60}")
+            
+            # 计算相对路径，保持目录结构
+            rel_path = os.path.relpath(video_file, input_dir)
+            output_file = os.path.join(output_dir, rel_path)
+            output_file = os.path.splitext(output_file)[0] + '.srt'
+            
+            # 创建输出文件的目录
+            os.makedirs(os.path.dirname(output_file), exist_ok=True)
+            
+            # 检查是否已经存在字幕文件
+            if os.path.exists(output_file):
+                logger.info(f"字幕文件已存在，跳过: {output_file}")
+                continue
+            
+            # 处理视频
+            start_time = time.time()
+            
+            # 提取音频
+            audio_path = audio_processor.extract_audio(video_file)
+            
+            # 转录音频
+            segments = model.transcribe(audio_path)
+            
+            # 生成字幕
+            SRTGenerator.generate_srt(segments, output_file)
+            
+            # 清理临时文件
+            if not config.keep_temp and os.path.exists(audio_path) and audio_path != video_file:
+                os.remove(audio_path)
+            
+            duration = time.time() - start_time
+            success_count += 1
+            
+            logger.info(f"✅ 完成: {os.path.basename(video_file)} -> {os.path.basename(output_file)}")
+            logger.info(f"⏱️  耗时: {duration:.2f}秒")
+            
+        except Exception as e:
+            logger.error(f"❌ 处理失败: {os.path.basename(video_file)} - {e}")
+            failed_files.append(video_file)
+            continue
+    
+    # 输出总结
+    logger.info(f"\n{'='*60}")
+    logger.info(f"批量处理完成！")
+    logger.info(f"✅ 成功: {success_count}/{len(video_files)} 个文件")
+    if failed_files:
+        logger.info(f"❌ 失败: {len(failed_files)} 个文件")
+        for failed_file in failed_files:
+            logger.info(f"   - {os.path.basename(failed_file)}")
+    logger.info(f"📁 输出目录: {output_dir}")
+    logger.info(f"{'='*60}")
+
+
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(
@@ -993,10 +1081,14 @@ def main():
                "  python main.py video.mp4 --model faster-base\n"
                "  python main.py video.mp4 --model faster-base --output subtitle.srt\n"
                "  python main.py video.mp4 --audio-quality high --enable-text-correction\n"
-               "  python main.py --list-models"
+               "  python main.py --list-models\n"
+               "  python main.py --input-dir ./videos --output-dir ./subtitles\n"
+               "  python main.py --input-dir ./videos --output-dir ./subtitles --model faster-base"
     )
     
     parser.add_argument("video_path", nargs='?', help="视频文件路径")
+    parser.add_argument("--input-dir", help="输入视频目录路径（批量处理）")
+    parser.add_argument("--output-dir", help="输出字幕目录路径（批量处理）")
     parser.add_argument("--model", default="base", 
                        help=f"选择模型 (默认: base)")
     parser.add_argument("--output", default=None, help="输出SRT文件路径")
@@ -1035,23 +1127,28 @@ def main():
         print_supported_models()
         return
     
-    # 检查输入文件
-    if not args.video_path:
-        parser.error("请指定视频文件路径")
-    
-    if not os.path.exists(args.video_path):
-        logger.error(f"文件不存在: {args.video_path}")
-        return
+    # 检查输入参数
+    if args.input_dir and args.output_dir:
+        # 批量处理模式
+        if not os.path.exists(args.input_dir):
+            logger.error(f"输入目录不存在: {args.input_dir}")
+            return
+        if not os.path.isdir(args.input_dir):
+            logger.error(f"输入路径不是目录: {args.input_dir}")
+            return
+    elif args.video_path:
+        # 单文件处理模式
+        if not os.path.exists(args.video_path):
+            logger.error(f"文件不存在: {args.video_path}")
+            return
+    else:
+        parser.error("请指定视频文件路径或使用 --input-dir 和 --output-dir 进行批量处理")
 
     # 验证模型名称
     if args.model not in SUPPORTED_MODELS:
         logger.error(f"不支持的模型: {args.model}")
         print_supported_models()
         return
-
-    # 设置输出路径
-    if args.output is None:
-        args.output = args.video_path.rsplit('.', 1)[0] + '.srt'
 
     # 设置设备 (自动检测CUDA可用性)
     if args.device == "auto":
@@ -1087,25 +1184,47 @@ def main():
     )
 
     try:
-        # 提取音频
-        audio_processor = AudioProcessor(config)
-        audio_path = audio_processor.extract_audio(args.video_path)
+        if args.input_dir and args.output_dir:
+            # 批量处理模式
+            logger.info(f"🎬 开始批量处理")
+            logger.info(f"📂 输入目录: {args.input_dir}")
+            logger.info(f"📁 输出目录: {args.output_dir}")
+            logger.info(f"🤖 使用模型: {args.model}")
+            logger.info(f"🔧 使用设备: {device}")
+            
+            process_directory(args.input_dir, args.output_dir, config, args.model, device)
+            
+        else:
+            # 单文件处理模式
+            # 设置输出路径
+            if args.output is None:
+                args.output = args.video_path.rsplit('.', 1)[0] + '.srt'
+            
+            logger.info(f"🎬 开始处理单个文件")
+            logger.info(f"📄 输入文件: {args.video_path}")
+            logger.info(f"📄 输出文件: {args.output}")
+            logger.info(f"🤖 使用模型: {args.model}")
+            logger.info(f"🔧 使用设备: {device}")
+            
+            # 提取音频
+            audio_processor = AudioProcessor(config)
+            audio_path = audio_processor.extract_audio(args.video_path)
 
-        # 转录音频
-        model = WhisperModel(args.model, device, config)
-        segments = model.transcribe(audio_path)
+            # 转录音频
+            model = WhisperModel(args.model, device, config)
+            segments = model.transcribe(audio_path)
 
-        # 生成字幕
-        SRTGenerator.generate_srt(segments, args.output)
+            # 生成字幕
+            SRTGenerator.generate_srt(segments, args.output)
 
-        # 清理临时文件
-        if not config.keep_temp and os.path.exists(audio_path) and audio_path != args.video_path:
-            os.remove(audio_path)
+            # 清理临时文件
+            if not config.keep_temp and os.path.exists(audio_path) and audio_path != args.video_path:
+                os.remove(audio_path)
 
-        logger.info("转换完成！")
+            logger.info("✅ 转换完成！")
 
     except Exception as e:
-        logger.error(f"转换失败: {e}")
+        logger.error(f"❌ 转换失败: {e}")
         raise
 
 

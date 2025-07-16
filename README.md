@@ -93,15 +93,31 @@ python main.py [视频文件] [选项]
 
 ### 使用示例
 
+## 单文件处理
 ```bash
 # 处理中文电视剧，使用faster-whisper
 python main.py 电视剧.mkv --model faster-base --output 电视剧字幕.srt
 
-# 使用FireRedASR处理中文内容
-python main.py 中文视频.mp4 --model firered-aed --language zh
+# 使用中文优化模型
+python main.py 中文视频.mp4 --model chinese-whisper-base --language zh
 
-# 使用large模型获得最佳效果
-python main.py 重要视频.mp4 --model large --output 高质量字幕.srt
+# 使用base模型获得平衡效果
+python main.py 重要视频.mp4 --model base --output 高质量字幕.srt
+```
+
+## 批量处理目录
+```bash
+# 批量处理整个目录
+python main.py --input-dir ./videos --output-dir ./subtitles --model faster-base
+
+# 处理多层级目录结构（保持目录结构）
+python main.py --input-dir ./电视剧 --output-dir ./字幕 --model chinese-whisper-base
+
+# 使用图形界面批量处理
+python batch_convert.py
+
+# 或者使用批处理脚本（Windows）
+batch_convert.bat
 ```
 
 ## 性能优化建议
